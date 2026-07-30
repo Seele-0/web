@@ -2,8 +2,16 @@ import { env } from "cloudflare:test";
 import { HttpError } from "../../functions/_lib/http";
 import {
   adjustContribution,
+  clearOrder,
+  deleteOrderItem,
   getOrderSnapshot,
+  replaceOrderFromText,
+  setAdminContribution,
+  setOrderLocked,
   setShareCount,
+  upsertAdminOrderItem,
+  ADMIN_IMPORT_DEVICE_ID,
+  ADMIN_IMPORT_DISPLAY_NAME,
 } from "../../functions/_lib/order-repository";
 
 const baseInput = {
@@ -14,6 +22,12 @@ const baseInput = {
   delta: 1 as const,
   now: "2026-07-30T10:00:00.000Z",
 };
+
+async function menuRevision(): Promise<number> {
+  const setting = await env.DB.prepare("SELECT value FROM settings WHERE key = 'menu_revision'").first<{ value: string }>();
+  return Number(setting?.value ?? 0);
+}
+
 
 describe("order repository", () => {
   it("applies a contribution atomically and increments revision", async () => {
@@ -142,4 +156,209 @@ describe("order repository", () => {
     });
     expect(snapshot).toMatchObject({ shareCount: 8, revision: 1 });
   });
+
+  it("replaces an order with administrator import contributions", async () => {
+    const snapshot = await replaceOrderFromText(env.DB, {
+      orderDate: baseInput.orderDate,
+      text: "黄瓜火腿 -- 12 -- 3\n麻婆豆腐 -- 12 -- 2",
+      now: baseInput.now,
+    });
+
+    expect(snapshot.totalQuantity).toBe(5);
+    expect(snapshot.dishes).toEqual([
+      expect.objectContaining({
+        name: "黄瓜火腿",
+        priceCents: 1200,
+        quantity: 3,
+        contributors: [{
+          deviceId: ADMIN_IMPORT_DEVICE_ID,
+          displayName: ADMIN_IMPORT_DISPLAY_NAME,
+          quantity: 3,
+        }],
+      }),
+      expect.objectContaining({
+        name: "麻婆豆腐",
+        priceCents: 1200,
+        quantity: 2,
+        contributors: [{
+          deviceId: ADMIN_IMPORT_DEVICE_ID,
+          displayName: ADMIN_IMPORT_DISPLAY_NAME,
+          quantity: 2,
+        }],
+      }),
+    ]);
+  });
+
+  it("rejects invalid replacement text without writes", async () => {
+    await expect(replaceOrderFromText(env.DB, {
+      orderDate: baseInput.orderDate,
+      text: "无效格式",
+      now: baseInput.now,
+    })).rejects.toMatchObject({ status: 400, code: "invalid_order_text" } satisfies Partial<HttpError>);
+
+    expect(await getOrderSnapshot(env.DB, baseInput.orderDate)).toMatchObject({ revision: 0, dishes: [] });
+    expect(await env.DB.prepare("SELECT COUNT(*) AS count FROM menu_items").first<{ count: number }>()).toMatchObject({ count: 5 });
+  });
+
+  it("creates a missing menu dish during order import and increments both revisions", async () => {
+    const snapshot = await replaceOrderFromText(env.DB, {
+      orderDate: baseInput.orderDate,
+      text: "新菜 -- 18 -- 2",
+      now: baseInput.now,
+    });
+
+    expect(snapshot.revision).toBe(1);
+    expect(await env.DB.prepare("SELECT price_cents, active FROM menu_items WHERE name = '新菜'").first())
+      .toMatchObject({ price_cents: 1800, active: 1 });
+    expect(await menuRevision()).toBe(1);
+  });
+
+  it("keeps an active menu price while importing the supplied daily snapshot price", async () => {
+    await replaceOrderFromText(env.DB, {
+      orderDate: baseInput.orderDate,
+      text: "酸菜鱼 -- 88 -- 2",
+      now: baseInput.now,
+    });
+
+    expect(await env.DB.prepare("SELECT price_cents FROM menu_items WHERE id = ?").bind(baseInput.menuItemId).first())
+      .toMatchObject({ price_cents: 6800 });
+    expect(await getOrderSnapshot(env.DB, baseInput.orderDate)).toMatchObject({
+      totalCents: 17_600,
+      dishes: [expect.objectContaining({ name: "酸菜鱼", priceCents: 8800, quantity: 2 })],
+    });
+    expect(await menuRevision()).toBe(0);
+  });
+
+  it("reactivates an inactive matching menu dish during replacement", async () => {
+    await env.DB.prepare("UPDATE menu_items SET active = 0 WHERE id = ?").bind(baseInput.menuItemId).run();
+
+    const snapshot = await replaceOrderFromText(env.DB, {
+      orderDate: baseInput.orderDate,
+      text: "酸菜鱼 -- 88 -- 2",
+      now: baseInput.now,
+    });
+
+    expect(snapshot.revision).toBe(1);
+    expect(await env.DB.prepare("SELECT price_cents, active FROM menu_items WHERE id = ?").bind(baseInput.menuItemId).first())
+      .toMatchObject({ price_cents: 8800, active: 1 });
+    expect(await menuRevision()).toBe(1);
+  });
+
+  it("adds an administrator dish, deletes every contributor for that dish, and clears snapshots", async () => {
+    const added = await upsertAdminOrderItem(env.DB, {
+      orderDate: baseInput.orderDate,
+      name: "新菜",
+      priceCents: 1800,
+      quantity: 2,
+      now: baseInput.now,
+    });
+    const menuItemId = added.dishes[0].menuItemId;
+    await adjustContribution(env.DB, {
+      ...baseInput,
+      menuItemId,
+      operationId: "other-device-new-dish",
+      deviceId: "device-b",
+      displayName: "李四",
+    });
+
+    const deleted = await deleteOrderItem(env.DB, {
+      orderDate: baseInput.orderDate,
+      menuItemId,
+      now: "2026-07-30T10:01:00.000Z",
+    });
+    expect(deleted.dishes).toEqual([]);
+    expect(await env.DB.prepare(
+      "SELECT COUNT(*) AS count FROM order_contributions WHERE order_date = ? AND menu_item_id = ?",
+    ).bind(baseInput.orderDate, menuItemId).first()).toMatchObject({ count: 0 });
+    expect(await env.DB.prepare(
+      "SELECT COUNT(*) AS count FROM order_items WHERE order_date = ? AND menu_item_id = ?",
+    ).bind(baseInput.orderDate, menuItemId).first()).toMatchObject({ count: 0 });
+
+    await upsertAdminOrderItem(env.DB, {
+      orderDate: baseInput.orderDate,
+      name: "另一道菜",
+      priceCents: 2400,
+      quantity: 1,
+      now: "2026-07-30T10:02:00.000Z",
+    });
+    const cleared = await clearOrder(env.DB, { orderDate: baseInput.orderDate, now: "2026-07-30T10:03:00.000Z" });
+    expect(cleared.dishes).toEqual([]);
+    expect(await env.DB.prepare("SELECT COUNT(*) AS count FROM order_contributions WHERE order_date = ?").bind(baseInput.orderDate).first())
+      .toMatchObject({ count: 0 });
+    expect(await env.DB.prepare("SELECT COUNT(*) AS count FROM order_items WHERE order_date = ?").bind(baseInput.orderDate).first())
+      .toMatchObject({ count: 0 });
+  });
+
+  it("increments clear-order revision exactly once", async () => {
+    await upsertAdminOrderItem(env.DB, {
+      orderDate: baseInput.orderDate,
+      name: "新菜",
+      priceCents: 1800,
+      quantity: 2,
+      now: baseInput.now,
+    });
+    const before = await getOrderSnapshot(env.DB, baseInput.orderDate);
+
+    const cleared = await clearOrder(env.DB, { orderDate: baseInput.orderDate, now: "2026-07-30T10:01:00.000Z" });
+
+    expect(cleared.revision).toBe(before.revision + 1);
+    expect(cleared.dishes).toEqual([]);
+  });
+
+  it("rejects administrator writes on a locked order without changing data or revisions", async () => {
+    await upsertAdminOrderItem(env.DB, {
+      orderDate: baseInput.orderDate,
+      name: "已点菜",
+      priceCents: 1800,
+      quantity: 2,
+      now: baseInput.now,
+    });
+    const existing = await getOrderSnapshot(env.DB, baseInput.orderDate);
+    const menuRevisionBefore = await menuRevision();
+    await setOrderLocked(env.DB, { orderDate: baseInput.orderDate, locked: true, now: "2026-07-30T10:01:00.000Z" });
+    const locked = await getOrderSnapshot(env.DB, baseInput.orderDate);
+    const menuItemId = locked.dishes[0].menuItemId;
+
+    const lockedWrites = [
+      replaceOrderFromText(env.DB, { orderDate: baseInput.orderDate, text: "新菜 -- 18 -- 2", now: "2026-07-30T10:02:00.000Z" }),
+      upsertAdminOrderItem(env.DB, { orderDate: baseInput.orderDate, name: "新菜", priceCents: 1800, quantity: 2, now: "2026-07-30T10:02:00.000Z" }),
+      deleteOrderItem(env.DB, { orderDate: baseInput.orderDate, menuItemId, now: "2026-07-30T10:02:00.000Z" }),
+      clearOrder(env.DB, { orderDate: baseInput.orderDate, now: "2026-07-30T10:02:00.000Z" }),
+    ];
+    for (const write of lockedWrites) {
+      await expect(write).rejects.toMatchObject({ status: 423, code: "order_locked" } satisfies Partial<HttpError>);
+    }
+
+    expect(await getOrderSnapshot(env.DB, baseInput.orderDate)).toEqual(locked);
+    expect(await menuRevision()).toBe(menuRevisionBefore);
+    expect(existing.dishes).toEqual(locked.dishes);
+  });
+
+  it("sets administrator contribution quantities with snapshots and removes an empty dish at zero", async () => {
+    const snapshot = await setAdminContribution(env.DB, {
+      orderDate: baseInput.orderDate,
+      menuItemId: baseInput.menuItemId,
+      deviceId: "device-c",
+      displayName: "王五",
+      quantity: 2,
+      now: baseInput.now,
+    });
+    expect(snapshot.dishes).toEqual([expect.objectContaining({
+      menuItemId: baseInput.menuItemId,
+      contributors: [{ deviceId: "device-c", displayName: "王五", quantity: 2 }],
+    })]);
+
+    const empty = await setAdminContribution(env.DB, {
+      orderDate: baseInput.orderDate,
+      menuItemId: baseInput.menuItemId,
+      deviceId: "device-c",
+      displayName: "王五",
+      quantity: 0,
+      now: "2026-07-30T10:01:00.000Z",
+    });
+    expect(empty.dishes).toEqual([]);
+    expect(await env.DB.prepare("SELECT COUNT(*) AS count FROM order_items WHERE order_date = ?").bind(baseInput.orderDate).first())
+      .toMatchObject({ count: 0 });
+  });
+
 });
