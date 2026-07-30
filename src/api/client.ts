@@ -50,6 +50,7 @@ export const apiClient = {
   adminDeleteOrderItem: (orderDate: string, menuItemId: string) => requestJson<OrderSnapshot>("/api/admin/order/item", jsonInit("DELETE", { orderDate, menuItemId })),
   adminClearOrder: (orderDate: string) => requestJson<OrderSnapshot>("/api/admin/order/clear", jsonInit("POST", { orderDate })),
   adminSetOrderLocked: (orderDate: string, locked: boolean) => requestJson<OrderSnapshot>("/api/admin/order/lock", jsonInit("PUT", { orderDate, locked })),
+  adminSetOrderShareCount: (orderDate: string, shareCount: number) => requestJson<OrderSnapshot>("/api/admin/order/share-count", jsonInit("PUT", { orderDate, shareCount })),
   adminCorrectContribution: (input: AdminContributionRequest) => requestJson<OrderSnapshot>("/api/admin/order/contribution", jsonInit("PUT", input)),
 };
 export type OrderingApi = Pick<typeof apiClient, "bootstrap" | "adjust" | "setShareCount" | "changes" | "history" | "historyDetail">;

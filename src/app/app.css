@@ -1141,3 +1141,122 @@ input:focus-visible {
   .menu-add-form, .order-add-form { grid-template-columns: 1fr; }
   .managed-item-row { align-items: flex-start; }
 }
+
+.admin-page-tabs,
+.admin-panel-tabs {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding: 2px;
+  scrollbar-width: thin;
+}
+
+.admin-page-tabs {
+  padding: 4px;
+  border: 1px solid rgba(37, 35, 31, 0.08);
+  border-radius: 14px;
+  background: rgba(255, 254, 250, 0.68);
+}
+
+.admin-tab {
+  flex: 0 0 auto;
+  min-height: 38px;
+  padding: 0 13px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 0.84rem;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.admin-tab[aria-selected="true"] {
+  border-color: rgba(197, 96, 56, 0.18);
+  background: var(--surface);
+  box-shadow: 0 3px 10px rgba(62, 48, 37, 0.08);
+  color: var(--accent-dark);
+}
+
+.admin-tab:focus-visible {
+  outline: 3px solid rgba(197, 96, 56, 0.3);
+  outline-offset: 2px;
+}
+
+.admin-tab-panel {
+  margin-top: 14px;
+}
+
+.admin-tab-panel .admin-subsection-first {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: 0;
+}
+
+.admin-section-copy,
+.danger-card > p {
+  margin: -3px 0 12px;
+  color: var(--muted);
+  font-size: 0.8rem;
+  line-height: 1.55;
+}
+
+.order-panel-tabs {
+  margin-top: 16px;
+  border-top: 1px solid rgba(37, 35, 31, 0.09);
+  padding-top: 14px;
+}
+
+.order-summary {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 13px;
+  border-radius: 11px;
+  background: #f7f4ee;
+  color: var(--muted);
+  font-size: 0.86rem;
+}
+
+.order-summary strong {
+  color: var(--accent-dark);
+  font-size: 1.08rem;
+}
+
+.order-share-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 9px;
+  align-items: end;
+}
+
+.order-share-form label,
+.menu-picker {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  font-size: 0.84rem;
+  font-weight: 700;
+}
+
+.admin-card select {
+  width: 100%;
+  min-height: 46px;
+  padding: 0 34px 0 12px;
+  border: 1px solid #d9d2c8;
+  border-radius: 11px;
+  appearance: auto;
+  background: #fffefa;
+  color: var(--ink);
+}
+
+.order-add-form .menu-picker {
+  grid-column: 1 / -1;
+}
+
+@media (max-width: 520px) {
+  .order-share-form {
+    grid-template-columns: 1fr;
+  }
+}

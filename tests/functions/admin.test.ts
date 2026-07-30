@@ -7,6 +7,7 @@ import { onRequestPut as renameRestaurant } from "../../functions/api/admin/sett
 import { onRequestPost as importOrder } from "../../functions/api/admin/order/import";
 import { onRequestPost as orderItemPost, onRequestDelete as orderItemDelete } from "../../functions/api/admin/order/item";
 import { onRequestPut as lockOrder } from "../../functions/api/admin/order/lock";
+import { onRequestPut as setOrderShareCount } from "../../functions/api/admin/order/share-count";
 import { onRequestPost as clearOrderRoute } from "../../functions/api/admin/order/clear";
 import { onRequestPut as correctContribution } from "../../functions/api/admin/order/contribution";
 import { verifyAdminRequest } from "../../functions/_lib/admin-session";
@@ -55,8 +56,9 @@ describe("administrator APIs", () => {
       orderItemPost(context(jsonRequest("/api/admin/order/item", "POST", { orderDate: "2026-07-30", name: "新菜", priceCents: 1000, quantity: 1 }))),
       orderItemDelete(context(jsonRequest("/api/admin/order/item", "DELETE", { orderDate: "2026-07-30", menuItemId: "dish-mi-fan" }))),
       clearOrderRoute(context(jsonRequest("/api/admin/order/clear", "POST", { orderDate: "2026-07-30" }))),
+      setOrderShareCount(context(jsonRequest("/api/admin/order/share-count", "PUT", { orderDate: "2026-07-30", shareCount: 3 }))),
     ]);
-    expect(requests.map((response) => response.status)).toEqual(Array(8).fill(401));
+    expect(requests.map((response) => response.status)).toEqual(Array(9).fill(401));
   });
 
   it("replaces menu text, adds and deletes individual dishes, and clears the menu", async () => {
@@ -121,13 +123,17 @@ describe("administrator APIs", () => {
       orderItemPost(context(jsonRequest("/api/admin/order/item", "POST", { orderDate: "2026-07-30", name: "新菜", priceCents: 1000, quantity: 0 }, cookie))),
       orderItemDelete(context(jsonRequest("/api/admin/order/item", "DELETE", { orderDate: "2026-07-30", menuItemId: "" }, cookie))),
       clearOrderRoute(context(jsonRequest("/api/admin/order/clear", "POST", { orderDate: "2026/07/30" }, cookie))),
+      setOrderShareCount(context(jsonRequest("/api/admin/order/share-count", "PUT", { orderDate: "2026-07-30", shareCount: 0 }, cookie))),
     ]);
-    expect(responses.map((response) => response.status)).toEqual(Array(7).fill(400));
+    expect(responses.map((response) => response.status)).toEqual(Array(8).fill(400));
   });
 
-  it("renames the restaurant and locks the order", async () => {
+  it("renames the restaurant, updates order share counts, and locks the order", async () => {
     const { cookie } = await adminCookie();
     expect((await renameRestaurant(context(jsonRequest("/api/admin/settings/restaurant-name", "PUT", { restaurantName: "暖味小馆" }, cookie)))).status).toBe(200);
+    const shareCount = await setOrderShareCount(context(jsonRequest("/api/admin/order/share-count", "PUT", { orderDate: "2026-07-30", shareCount: 3 }, cookie)));
+    expect(shareCount.status).toBe(200);
+    expect(await shareCount.json()).toMatchObject({ orderDate: "2026-07-30", shareCount: 3 });
     expect((await lockOrder(context(jsonRequest("/api/admin/order/lock", "PUT", { orderDate: "2026-07-30", locked: true }, cookie)))).status).toBe(200);
     expect((await env.DB.prepare("SELECT value FROM settings WHERE key = 'restaurant_name'").first<{ value: string }>())?.value).toBe("暖味小馆");
     expect((await getOrderSnapshot(env.DB, "2026-07-30")).locked).toBe(true);
@@ -157,8 +163,9 @@ describe("administrator APIs", () => {
       correctContribution(context(jsonRequest("/api/admin/order/contribution", "PUT", {
         orderDate: "2026-07-29", menuItemId: "dish-suan-cai-yu", deviceId: "device-a", displayName: "张三", quantity: 2,
       }, cookie))),
+      setOrderShareCount(context(jsonRequest("/api/admin/order/share-count", "PUT", { orderDate: "2026-07-29", shareCount: 3 }, cookie))),
     ]);
-    expect(responses.map((response) => response.status)).toEqual(Array(5).fill(423));
+    expect(responses.map((response) => response.status)).toEqual(Array(6).fill(423));
     for (const response of responses) expect(await response.json()).toMatchObject({ error: { code: "order_locked" } });
   });
 });
