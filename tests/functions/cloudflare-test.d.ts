@@ -1,10 +1,12 @@
 import type { D1Migration } from "@cloudflare/vitest-pool-workers";
 
-interface TestEnv {
-  DB: D1Database;
-  TEST_MIGRATIONS: D1Migration[];
+declare global {
+  namespace Cloudflare {
+    interface Env {
+      DB: D1Database;
+      TEST_MIGRATIONS: D1Migration[];
+    }
+  }
 }
 
-declare module "cloudflare:test" {
-  interface ProvidedEnv extends TestEnv {}
-}
+export {};
