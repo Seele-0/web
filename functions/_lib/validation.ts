@@ -53,3 +53,37 @@ export function parseAdjustRequest(input: unknown, today = getShanghaiBusinessDa
     delta: value.delta,
   };
 }
+
+
+export type ShareCountRequest = {
+  operationId: string;
+  orderDate: string;
+  deviceId: string;
+  displayName: string;
+  shareCount: number;
+};
+
+export function parseShareCountRequest(input: unknown, today = getShanghaiBusinessDate()): ShareCountRequest {
+  const value = objectValue(input);
+  const orderDate = typeof value.orderDate === "string" ? value.orderDate : "";
+  if (!DATE_PATTERN.test(orderDate)) {
+    throw new HttpError(400, "invalid_date", "订单日期格式无效");
+  }
+  if (orderDate !== today) {
+    throw new HttpError(403, "historical_order_read_only", "普通用户只能修改当天订单");
+  }
+  if (!Number.isInteger(value.shareCount) || (value.shareCount as number) < 1 || (value.shareCount as number) > 100) {
+    throw new HttpError(400, "invalid_share_count", "均摊人数必须为 1 到 100");
+  }
+  const displayName = typeof value.displayName === "string" ? value.displayName.trim() : "";
+  if (displayName.length < 1 || displayName.length > 30) {
+    throw new HttpError(400, "invalid_display_name", "姓名长度必须为 1 到 30 个字符");
+  }
+  return {
+    operationId: identifier(value.operationId, "operationId"),
+    orderDate,
+    deviceId: identifier(value.deviceId, "deviceId"),
+    displayName,
+    shareCount: value.shareCount as number,
+  };
+}

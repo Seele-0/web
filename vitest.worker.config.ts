@@ -8,7 +8,11 @@ export default defineConfig({
     cloudflareTest({
       wrangler: { configPath: "./wrangler.test.toml" },
       miniflare: {
-        bindings: { TEST_MIGRATIONS: migrations },
+        bindings: {
+          TEST_MIGRATIONS: migrations,
+          ADMIN_PASSWORD: "test-admin-password",
+          ADMIN_SESSION_SECRET: "test-session-secret-at-least-32-characters",
+        },
       },
     }),
   ],
