@@ -11,4 +11,7 @@ coverage/
 
 .worktrees/
 
-.worktrees/
+playwright-report/
+test-results/
+blob-report/
+backups/

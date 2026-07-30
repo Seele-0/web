@@ -1,15 +1,16 @@
 {
   "name": "collaborative-ordering-app",
   "version": "1.0.0",
-  "description": "",
+  "description": "Mobile-first collaborative restaurant ordering app for Cloudflare Pages Functions and D1",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:workers": "vitest run --config vitest.worker.config.ts",
-    "test:e2e": "playwright test",
-    "preview:pages": "wrangler pages dev dist --d1 DB=ordering-local-db"
+    "test:e2e": "playwright test --config playwright.config.ts",
+    "preview:pages": "wrangler pages dev dist --d1 DB=ordering-local-db",
+    "e2e:serve": "npm run build && node scripts/start-e2e.mjs"
   },
   "keywords": [],
   "author": "",
