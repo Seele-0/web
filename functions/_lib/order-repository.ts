@@ -122,7 +122,7 @@ export async function adjustContribution(db: D1Database, input: AdjustInput): Pr
           (order_date, menu_item_id, name, price_cents, sort_order, created_at, updated_at)
          SELECT ?, id, name, price_cents, sort_order, ?, ?
          FROM menu_items
-         WHERE id = ? AND active = 1
+         WHERE id = ?
          ON CONFLICT(order_date, menu_item_id) DO NOTHING`,
       )
       .bind(input.orderDate, input.now, input.now, input.menuItemId),

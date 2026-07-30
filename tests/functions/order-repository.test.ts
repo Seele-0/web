@@ -22,6 +22,30 @@ describe("order repository", () => {
     expect(snapshot.dishes[0]).toMatchObject({ menuItemId: "dish-suan-cai-yu", quantity: 1 });
   });
 
+  it("creates an order-item snapshot when the menu is deactivated after active preflight", async () => {
+    const db = {
+      prepare(sql: string) {
+        return env.DB.prepare(sql);
+      },
+      async batch(statements: D1PreparedStatement[]) {
+        await env.DB.prepare("UPDATE menu_items SET active = 0 WHERE id = ?").bind(baseInput.menuItemId).run();
+        return env.DB.batch(statements);
+      },
+    } as unknown as D1Database;
+
+    const snapshot = await adjustContribution(db, { ...baseInput, operationId: "deactivate-after-preflight" });
+    const contribution = await env.DB.prepare(
+      "SELECT COUNT(*) AS count FROM order_contributions WHERE order_date = ? AND menu_item_id = ?",
+    ).bind(baseInput.orderDate, baseInput.menuItemId).first<{ count: number }>();
+    const orderItem = await env.DB.prepare(
+      "SELECT COUNT(*) AS count FROM order_items WHERE order_date = ? AND menu_item_id = ?",
+    ).bind(baseInput.orderDate, baseInput.menuItemId).first<{ count: number }>();
+
+    expect(snapshot.dishes).toEqual([expect.objectContaining({ menuItemId: baseInput.menuItemId, quantity: 1 })]);
+    expect(contribution?.count).toBe(1);
+    expect(orderItem?.count).toBe(1);
+  });
+
   it("treats a repeated operation id as idempotent", async () => {
     await adjustContribution(env.DB, { ...baseInput, operationId: "device-a-1" });
     const replay = await adjustContribution(env.DB, { ...baseInput, operationId: "device-a-1" });
