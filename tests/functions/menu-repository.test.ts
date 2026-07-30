@@ -2,6 +2,7 @@ import { env } from "cloudflare:test";
 import {
   clearMenu,
   deleteMenuItem,
+  importMenuMarkdown,
   replaceMenuFromText,
   upsertMenuItem,
 } from "../../functions/_lib/menu-repository";
@@ -99,6 +100,62 @@ describe("menu repository writes", () => {
       action: "replace_menu",
     });
     expect(JSON.parse(activities[0].details_json)).toEqual({ itemCount: 2 });
+  });
+
+  it("replaces eighty dishes with a fixed-size D1 batch", async () => {
+    const batchSizes: number[] = [];
+    const countedDb = {
+      prepare: env.DB.prepare.bind(env.DB),
+      batch: async (statements: D1PreparedStatement[]) => {
+        batchSizes.push(statements.length);
+        return env.DB.batch(statements);
+      },
+    } as D1Database;
+    const text = Array.from(
+      { length: 80 },
+      (_, index) => `批量菜${index + 1} -- ${index + 1}`,
+    ).join("\n");
+
+    await replaceMenuFromText(countedDb, text, NOW);
+
+    expect(batchSizes).toEqual([4]);
+    expect(await env.DB.prepare(
+      "SELECT COUNT(*) AS count FROM menu_items WHERE active = 1",
+    ).first()).toEqual({ count: 80 });
+    expect(await env.DB.prepare(
+      "SELECT name, price_cents, sort_order FROM menu_items WHERE active = 1 ORDER BY sort_order LIMIT 1",
+    ).first()).toEqual({ name: "批量菜1", price_cents: 100, sort_order: 1 });
+    expect(await env.DB.prepare(
+      "SELECT name, price_cents, sort_order FROM menu_items WHERE active = 1 ORDER BY sort_order DESC LIMIT 1",
+    ).first()).toEqual({ name: "批量菜80", price_cents: 8000, sort_order: 80 });
+    expect(await menuRevision()).toBe(1);
+  });
+
+  it("rejects an overlong replacement name without any side effects", async () => {
+    const before = await menuRows();
+    const overlongName = "菜".repeat(81);
+
+    await expect(
+      replaceMenuFromText(env.DB, `${overlongName} -- 10\n有效菜 -- 12`, NOW),
+    ).rejects.toMatchObject({
+      status: 400,
+      code: "invalid_menu_text",
+      message: "菜品名称长度必须为 1 到 80 个字符",
+    });
+
+    await expectNoMenuMutation(before);
+  });
+
+  it("preserves legacy markdown source lines when skipping headings and table rows", async () => {
+    const result = await importMenuMarkdown(
+      env.DB,
+      "# 今日菜单\n| 菜品名称 | 价格 |\n| --- | --- |\n| 新菜 | 10 |",
+      NOW,
+    );
+
+    expect(result.items).toEqual([
+      { name: "新菜", priceCents: 1000, sourceLine: 4 },
+    ]);
   });
 
   it("rejects an empty replacement without changing menu, revision, or activity", async () => {
@@ -199,6 +256,46 @@ describe("menu repository writes", () => {
     ]);
   });
 
+  it("returns and audits the real id for concurrent same-name upserts", async () => {
+    const [first, second] = await Promise.all([
+      upsertMenuItem(env.DB, { name: "并发菜", priceCents: 1000, now: NOW }),
+      upsertMenuItem(env.DB, {
+        name: "并发菜",
+        priceCents: 1200,
+        now: "2026-07-30T12:00:01.000Z",
+      }),
+    ]);
+    const stored = await env.DB.prepare(
+      "SELECT id FROM menu_items WHERE name = '并发菜'",
+    ).first<{ id: string }>();
+
+    expect(stored).toBeTruthy();
+    expect(first.id).toBe(stored?.id);
+    expect(second.id).toBe(stored?.id);
+    expect(await menuRevision()).toBe(2);
+    const auditIds = (await activityRows()).map(
+      (row) => JSON.parse(row.details_json).menuItemId,
+    );
+    expect(auditIds).toEqual([stored?.id, stored?.id]);
+  });
+
+  it("assigns distinct trailing sort orders to concurrent new dishes", async () => {
+    const created = await Promise.all([
+      upsertMenuItem(env.DB, { name: "并发菜甲", priceCents: 1000, now: NOW }),
+      upsertMenuItem(env.DB, {
+        name: "并发菜乙",
+        priceCents: 1200,
+        now: "2026-07-30T12:00:01.000Z",
+      }),
+    ]);
+
+    expect(created.map((item) => item.sortOrder).sort((a, b) => a - b)).toEqual([6, 7]);
+    const stored = await env.DB.prepare(
+      "SELECT sort_order FROM menu_items WHERE name IN ('并发菜甲', '并发菜乙') ORDER BY sort_order",
+    ).all<{ sort_order: number }>();
+    expect(stored.results.map((row) => row.sort_order)).toEqual([6, 7]);
+  });
+
   it("rejects invalid dish names and prices without side effects", async () => {
     const before = await menuRows();
 
@@ -235,6 +332,40 @@ describe("menu repository writes", () => {
       menuItemId: "dish-suan-cai-yu",
       name: "酸菜鱼",
     });
+  });
+
+  it("does not increment revision or activity on a second consecutive delete", async () => {
+    await deleteMenuItem(env.DB, { menuItemId: "dish-suan-cai-yu", now: NOW });
+
+    await expect(deleteMenuItem(env.DB, {
+      menuItemId: "dish-suan-cai-yu",
+      now: "2026-07-30T12:00:01.000Z",
+    })).rejects.toMatchObject({
+      status: 404,
+      code: "menu_item_not_found",
+    });
+
+    expect(await menuRevision()).toBe(1);
+    expect(await activityRows()).toHaveLength(1);
+  });
+
+  it("allows only one concurrent delete to change revision and activity", async () => {
+    const results = await Promise.allSettled([
+      deleteMenuItem(env.DB, { menuItemId: "dish-suan-cai-yu", now: NOW }),
+      deleteMenuItem(env.DB, {
+        menuItemId: "dish-suan-cai-yu",
+        now: "2026-07-30T12:00:01.000Z",
+      }),
+    ]);
+
+    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    const rejected = results.find((result) => result.status === "rejected");
+    expect(rejected).toMatchObject({
+      status: "rejected",
+      reason: { status: 404, code: "menu_item_not_found" },
+    });
+    expect(await menuRevision()).toBe(1);
+    expect(await activityRows()).toHaveLength(1);
   });
 
   it("treats missing or already inactive dish ids as not found without increasing revision", async () => {
