@@ -177,6 +177,44 @@ describe("order repository", () => {
     expect(snapshot).toMatchObject({ shareCount: 8, revision: 1 });
   });
 
+  it("rejects an adjustment when the order becomes locked immediately before its batch without side effects", async () => {
+    await setOrderLocked(env.DB, { orderDate: baseInput.orderDate, locked: false, now: baseInput.now });
+    const before = await getOrderSnapshot(env.DB, baseInput.orderDate);
+
+    await expect(adjustContribution(lockImmediatelyBeforeBatch(baseInput.orderDate), {
+      ...baseInput,
+      operationId: "adjust-lock-race",
+    })).rejects.toMatchObject({ status: 423, code: "order_locked" } satisfies Partial<HttpError>);
+
+    expect(await getOrderSnapshot(env.DB, baseInput.orderDate)).toEqual({ ...before, locked: true });
+    expect(await env.DB.prepare("SELECT COUNT(*) AS count FROM operations WHERE operation_id = ?").bind("adjust-lock-race").first())
+      .toMatchObject({ count: 0 });
+    expect(await env.DB.prepare("SELECT COUNT(*) AS count FROM order_items WHERE order_date = ?").bind(baseInput.orderDate).first())
+      .toMatchObject({ count: 0 });
+    expect(await env.DB.prepare("SELECT COUNT(*) AS count FROM order_contributions WHERE order_date = ?").bind(baseInput.orderDate).first())
+      .toMatchObject({ count: 0 });
+    expect(await activityCount(baseInput.orderDate, "adjust_contribution")).toBe(0);
+  });
+
+  it("rejects a share-count update when the order becomes locked immediately before its batch without side effects", async () => {
+    await setOrderLocked(env.DB, { orderDate: baseInput.orderDate, locked: false, now: baseInput.now });
+    const before = await getOrderSnapshot(env.DB, baseInput.orderDate);
+
+    await expect(setShareCount(lockImmediatelyBeforeBatch(baseInput.orderDate), {
+      operationId: "share-lock-race",
+      orderDate: baseInput.orderDate,
+      deviceId: baseInput.deviceId,
+      displayName: baseInput.displayName,
+      shareCount: 8,
+      now: "2026-07-30T10:01:00.000Z",
+    })).rejects.toMatchObject({ status: 423, code: "order_locked" } satisfies Partial<HttpError>);
+
+    expect(await getOrderSnapshot(env.DB, baseInput.orderDate)).toEqual({ ...before, locked: true });
+    expect(await env.DB.prepare("SELECT COUNT(*) AS count FROM operations WHERE operation_id = ?").bind("share-lock-race").first())
+      .toMatchObject({ count: 0 });
+    expect(await activityCount(baseInput.orderDate, "set_share_count")).toBe(0);
+  });
+
   it("replaces an order with administrator import contributions", async () => {
     const snapshot = await replaceOrderFromText(env.DB, {
       orderDate: baseInput.orderDate,
@@ -570,6 +608,26 @@ describe("order repository", () => {
       dishes: [],
     });
     expect(await activityCount(baseInput.orderDate, "delete_order_item")).toBe(1);
+  });
+
+  it("records the resolved menu item id in administrator upsert activity details", async () => {
+    const snapshot = await upsertAdminOrderItem(env.DB, {
+      orderDate: baseInput.orderDate,
+      name: "审计新增菜",
+      priceCents: 1800,
+      quantity: 2,
+      now: baseInput.now,
+    });
+    const activity = await env.DB.prepare(
+      "SELECT details_json FROM activity_log WHERE order_date = ? AND action = 'upsert_admin_order_item'",
+    ).bind(baseInput.orderDate).first<{ details_json: string }>();
+
+    expect(JSON.parse(activity?.details_json ?? "{}")).toMatchObject({
+      menuItemId: snapshot.dishes[0].menuItemId,
+      name: "审计新增菜",
+      priceCents: 1800,
+      quantity: 2,
+    });
   });
 
   it("handles concurrent same-name imports and upserts with one live menu item and date-specific snapshots", async () => {

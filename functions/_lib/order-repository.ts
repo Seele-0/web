@@ -215,11 +215,13 @@ export async function adjustContribution(db: D1Database, input: AdjustInput): Pr
     }
   }
 
-  const statements = [
+  const results = await db.batch([
     ensureOrderStatement(db, input.orderDate, input.now),
     db
       .prepare(
-        "INSERT INTO operations (operation_id, order_date, device_id, operation_type, payload_json, created_at) VALUES (?, ?, ?, 'adjust', ?, ?)",
+        `INSERT INTO operations (operation_id, order_date, device_id, operation_type, payload_json, created_at)
+         SELECT ?, ?, ?, 'adjust', ?, ?
+         WHERE ${ORDER_UNLOCKED_GUARD}`,
       )
       .bind(
         input.operationId,
@@ -227,6 +229,7 @@ export async function adjustContribution(db: D1Database, input: AdjustInput): Pr
         input.deviceId,
         JSON.stringify({ menuItemId: input.menuItemId, delta: input.delta }),
         input.now,
+        input.orderDate,
       ),
     db
       .prepare(
@@ -234,15 +237,16 @@ export async function adjustContribution(db: D1Database, input: AdjustInput): Pr
           (order_date, menu_item_id, name, price_cents, sort_order, created_at, updated_at)
          SELECT ?, id, name, price_cents, sort_order, ?, ?
          FROM menu_items
-         WHERE id = ?
+         WHERE id = ? AND ${ORDER_UNLOCKED_GUARD}
          ON CONFLICT(order_date, menu_item_id) DO NOTHING`,
       )
-      .bind(input.orderDate, input.now, input.now, input.menuItemId),
+      .bind(input.orderDate, input.now, input.now, input.menuItemId, input.orderDate),
     db
       .prepare(
         `INSERT INTO order_contributions
           (order_date, menu_item_id, device_id, display_name, quantity, updated_at)
-         VALUES (?, ?, ?, ?, CASE WHEN ? = 1 THEN 1 ELSE 0 END, ?)
+         SELECT ?, ?, ?, ?, CASE WHEN ? = 1 THEN 1 ELSE 0 END, ?
+         WHERE ${ORDER_UNLOCKED_GUARD}
          ON CONFLICT(order_date, menu_item_id, device_id)
          DO UPDATE SET
            display_name = excluded.display_name,
@@ -256,21 +260,27 @@ export async function adjustContribution(db: D1Database, input: AdjustInput): Pr
         input.displayName,
         input.delta,
         input.now,
+        input.orderDate,
         input.delta,
       ),
     db
       .prepare(
-        "DELETE FROM order_contributions WHERE order_date = ? AND menu_item_id = ? AND device_id = ? AND quantity <= 0",
+        `DELETE FROM order_contributions
+         WHERE order_date = ? AND menu_item_id = ? AND device_id = ? AND quantity <= 0
+           AND ${ORDER_UNLOCKED_GUARD}`,
       )
-      .bind(input.orderDate, input.menuItemId, input.deviceId),
+      .bind(input.orderDate, input.menuItemId, input.deviceId, input.orderDate),
     db
       .prepare(
-        "UPDATE daily_orders SET revision = revision + 1, updated_at = ? WHERE order_date = ?",
+        `UPDATE daily_orders SET revision = revision + 1, updated_at = ?
+         WHERE order_date = ? AND ${ORDER_UNLOCKED_GUARD}`,
       )
-      .bind(input.now, input.orderDate),
+      .bind(input.now, input.orderDate, input.orderDate),
     db
       .prepare(
-        "INSERT INTO activity_log (order_date, device_id, display_name, action, details_json, created_at) VALUES (?, ?, ?, 'adjust_contribution', ?, ?)",
+        `INSERT INTO activity_log (order_date, device_id, display_name, action, details_json, created_at)
+         SELECT ?, ?, ?, 'adjust_contribution', ?, ?
+         WHERE ${ORDER_UNLOCKED_GUARD}`,
       )
       .bind(
         input.orderDate,
@@ -278,9 +288,11 @@ export async function adjustContribution(db: D1Database, input: AdjustInput): Pr
         input.displayName,
         JSON.stringify({ menuItemId: input.menuItemId, delta: input.delta }),
         input.now,
+        input.orderDate,
       ),
-  ];
-  await db.batch(statements);
+    orderLockStatusStatement(db, input.orderDate),
+  ]);
+  assertBatchRemainedUnlocked(results);
   return getOrderSnapshot(db, input.orderDate);
 }
 
@@ -291,21 +303,43 @@ export async function setShareCount(db: D1Database, input: ShareCountInput): Pro
   if (await operationExists(db, input.operationId)) return getOrderSnapshot(db, input.orderDate);
   assertUnlocked(await getOrderRow(db, input.orderDate));
 
-  await db.batch([
+  const results = await db.batch([
     ensureOrderStatement(db, input.orderDate, input.now),
     db
       .prepare(
-        "INSERT INTO operations (operation_id, order_date, device_id, operation_type, payload_json, created_at) VALUES (?, ?, ?, 'share_count', ?, ?)",
+        `INSERT INTO operations (operation_id, order_date, device_id, operation_type, payload_json, created_at)
+         SELECT ?, ?, ?, 'share_count', ?, ?
+         WHERE ${ORDER_UNLOCKED_GUARD}`,
       )
-      .bind(input.operationId, input.orderDate, input.deviceId, JSON.stringify({ shareCount: input.shareCount }), input.now),
-    db.prepare("UPDATE daily_orders SET share_count = ?, revision = revision + 1, updated_at = ? WHERE order_date = ?")
-      .bind(input.shareCount, input.now, input.orderDate),
+      .bind(
+        input.operationId,
+        input.orderDate,
+        input.deviceId,
+        JSON.stringify({ shareCount: input.shareCount }),
+        input.now,
+        input.orderDate,
+      ),
+    db.prepare(
+      `UPDATE daily_orders SET share_count = ?, revision = revision + 1, updated_at = ?
+       WHERE order_date = ? AND ${ORDER_UNLOCKED_GUARD}`,
+    ).bind(input.shareCount, input.now, input.orderDate, input.orderDate),
     db
       .prepare(
-        "INSERT INTO activity_log (order_date, device_id, display_name, action, details_json, created_at) VALUES (?, ?, ?, 'set_share_count', ?, ?)",
+        `INSERT INTO activity_log (order_date, device_id, display_name, action, details_json, created_at)
+         SELECT ?, ?, ?, 'set_share_count', ?, ?
+         WHERE ${ORDER_UNLOCKED_GUARD}`,
       )
-      .bind(input.orderDate, input.deviceId, input.displayName, JSON.stringify({ shareCount: input.shareCount }), input.now),
+      .bind(
+        input.orderDate,
+        input.deviceId,
+        input.displayName,
+        JSON.stringify({ shareCount: input.shareCount }),
+        input.now,
+        input.orderDate,
+      ),
+    orderLockStatusStatement(db, input.orderDate),
   ]);
+  assertBatchRemainedUnlocked(results);
   return getOrderSnapshot(db, input.orderDate);
 }
 
@@ -423,14 +457,24 @@ export async function upsertAdminOrderItem(db: D1Database, input: AdminOrderItem
     ).bind(input.now, input.orderDate, input.orderDate),
     db.prepare(
       `INSERT INTO activity_log (order_date, device_id, display_name, action, details_json, created_at)
-       SELECT ?, ?, ?, 'upsert_admin_order_item', ?, ?
+       SELECT ?, ?, ?, 'upsert_admin_order_item',
+              json_object(
+                'menuItemId', m.id,
+                'name', json_extract(value, '$.name'),
+                'priceCents', CAST(json_extract(value, '$.priceCents') AS INTEGER),
+                'quantity', ?
+              ),
+              ?
+       FROM json_each(?)
+       JOIN menu_items m ON m.name = json_extract(value, '$.name')
        WHERE ${ORDER_UNLOCKED_GUARD}`,
     ).bind(
       input.orderDate,
       ADMIN_IMPORT_DEVICE_ID,
       ADMIN_IMPORT_DISPLAY_NAME,
-      JSON.stringify({ name, priceCents, quantity }),
+      quantity,
       input.now,
+      serializedItems,
       input.orderDate,
     ),
     orderLockStatusStatement(db, input.orderDate),
