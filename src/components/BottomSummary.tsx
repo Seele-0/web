@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import { formatCents } from "../domain/money";
 
 type BottomSummaryProps = {
@@ -9,12 +10,28 @@ type BottomSummaryProps = {
   onOverview: () => void;
 };
 
+const SHARE_COUNT_ERROR = "均摊人数必须是 1 到 100 之间的整数";
+
 export function BottomSummary({ totalQuantity, totalCents, shareCount, locked = false, onShareCount, onOverview }: BottomSummaryProps) {
+  const [shareCountDraft, setShareCountDraft] = useState(String(shareCount));
   const perPersonCents = totalCents === 0 ? 0 : Math.ceil(totalCents / Math.max(1, shareCount));
 
-  function updateShareCount(value: string) {
-    const next = Number(value);
-    if (Number.isInteger(next) && next >= 1 && next <= 100) void onShareCount(next);
+  useEffect(() => {
+    setShareCountDraft(String(shareCount));
+  }, [shareCount]);
+
+  function commitShareCount() {
+    const normalized = shareCountDraft.trim();
+    const next = Number(normalized);
+
+    if (normalized === "" || !Number.isInteger(next) || next < 1 || next > 100) {
+      window.alert(SHARE_COUNT_ERROR);
+      setShareCountDraft(String(shareCount));
+      return;
+    }
+
+    setShareCountDraft(String(next));
+    if (next !== shareCount) void onShareCount(next);
   }
 
   return (
@@ -32,9 +49,13 @@ export function BottomSummary({ totalQuantity, totalCents, shareCount, locked = 
             inputMode="numeric"
             min="1"
             max="100"
-            value={shareCount}
+            value={shareCountDraft}
             disabled={locked}
-            onChange={(event) => updateShareCount(event.target.value)}
+            onChange={(event) => setShareCountDraft(event.target.value)}
+            onBlur={commitShareCount}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") event.currentTarget.blur();
+            }}
           />
           <span>人</span>
           <strong>{formatCents(perPersonCents)} / 人</strong>

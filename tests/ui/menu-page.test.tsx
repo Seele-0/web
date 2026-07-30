@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MenuPage } from "../../src/menu/MenuPage";
 
@@ -33,6 +33,39 @@ it("renders the warm menu without exposing orderer names and supports interactio
 
   const shareCount = screen.getByRole("spinbutton", { name: "均摊" });
   expect(shareCount).toHaveAttribute("max", "100");
-  fireEvent.change(shareCount, { target: { value: "101" } });
+});
+
+it("lets users clear the share count and only saves a valid value after confirmation", async () => {
+  const user = userEvent.setup();
+  const onShareCount = vi.fn();
+  render(<MenuPage restaurantName="今日点餐" date="2026年7月30日" displayName="张三" deviceId="device-a" status="synced" menu={menu} order={order} onAdjust={vi.fn()} onShareCount={onShareCount} onOverview={vi.fn()} onEditName={vi.fn()} />);
+
+  const shareCount = screen.getByRole("spinbutton", { name: "均摊" });
+  await user.clear(shareCount);
+  expect(shareCount).toHaveValue(null);
   expect(onShareCount).not.toHaveBeenCalled();
+
+  await user.type(shareCount, "3");
+  expect(onShareCount).not.toHaveBeenCalled();
+
+  await user.keyboard("{Enter}");
+  expect(onShareCount).toHaveBeenCalledOnce();
+  expect(onShareCount).toHaveBeenCalledWith(3);
+});
+
+it.each(["", "0", "1.5", "101"])("rejects invalid share count %j and restores the original value", async (invalidValue) => {
+  const user = userEvent.setup();
+  const onShareCount = vi.fn();
+  const alert = vi.spyOn(window, "alert").mockImplementation(() => undefined);
+  render(<MenuPage restaurantName="今日点餐" date="2026年7月30日" displayName="张三" deviceId="device-a" status="synced" menu={menu} order={order} onAdjust={vi.fn()} onShareCount={onShareCount} onOverview={vi.fn()} onEditName={vi.fn()} />);
+
+  const shareCount = screen.getByRole("spinbutton", { name: "均摊" });
+  await user.clear(shareCount);
+  if (invalidValue) await user.type(shareCount, invalidValue);
+  await user.tab();
+
+  expect(alert).toHaveBeenCalledWith("均摊人数必须是 1 到 100 之间的整数");
+  expect(shareCount).toHaveValue(2);
+  expect(onShareCount).not.toHaveBeenCalled();
+  alert.mockRestore();
 });

@@ -28,6 +28,8 @@ test("supports collaborative ordering, offline replay, history, and admin menu p
   await zhangPage.getByRole("button", { name: "返回菜单" }).click();
 
   await zhangPage.getByLabel("均摊").fill("8");
+  await expect(zhangPage.getByText("¥8.50 / 人")).not.toBeVisible();
+  await zhangPage.getByLabel("均摊").press("Enter");
   await expect(zhangPage.getByText("¥8.50 / 人")).toBeVisible();
 
   const liContext = await browser.newContext();
