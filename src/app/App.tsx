@@ -1,10 +1,10 @@
+import { AppRouter } from "./AppRouter";
 import { NameGate } from "../components/NameGate";
 import { OfflineBanner } from "../components/OfflineBanner";
 import { getShanghaiBusinessDate } from "../domain/date";
 import type { ActiveIdentity } from "../domain/identity";
 import { useIdentity } from "../hooks/useIdentity";
 import { useOrderSync } from "../hooks/useOrderSync";
-import { MenuPage } from "../menu/MenuPage";
 
 function formatBusinessDate(value: string): string {
   const [year, month, day] = value.split("-").map(Number);
@@ -17,7 +17,7 @@ function OrderingApp({ identity, onEditName }: { identity: ActiveIdentity; onEdi
   return (
     <>
       <OfflineBanner visible={status === "offline"} />
-      <MenuPage
+      <AppRouter
         restaurantName={restaurantName}
         date={formatBusinessDate(getShanghaiBusinessDate())}
         displayName={identity.displayName}
@@ -27,10 +27,6 @@ function OrderingApp({ identity, onEditName }: { identity: ActiveIdentity; onEdi
         order={order}
         onAdjust={adjust}
         onShareCount={setShareCount}
-        onOverview={() => {
-          window.history.pushState({}, "", "/overview");
-          window.dispatchEvent(new PopStateEvent("popstate"));
-        }}
         onEditName={onEditName}
       />
     </>
