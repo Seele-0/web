@@ -55,6 +55,16 @@ describe("parseMenuImportText", () => {
       ],
     });
   });
+
+  it("reserves a menu name even when its first row has an invalid price", () => {
+    expect(parseMenuImportText("酸菜鱼 -- 坏价格\n酸菜鱼 -- 68")).toEqual({
+      items: [],
+      errors: [
+        { sourceLine: 1, message: "价格格式无效", source: "酸菜鱼 -- 坏价格" },
+        { sourceLine: 2, message: "菜品名称重复", source: "酸菜鱼 -- 68" },
+      ],
+    });
+  });
 });
 
 describe("parseOrderImportText", () => {
@@ -106,5 +116,19 @@ describe("parseOrderImportText", () => {
       { sourceLine: 4, message: "菜品名称不能为空", source: " -- 12 -- 1" },
       { sourceLine: 5, message: "价格格式无效", source: "坏价格 -- 100000.01 -- 1" },
     ]);
+  });
+
+  it("reserves an order name even when its first row has an invalid quantity", () => {
+    expect(parseOrderImportText("麻婆豆腐 -- 12 -- 0\n麻婆豆腐 -- 12 -- 2")).toEqual({
+      items: [],
+      errors: [
+        {
+          sourceLine: 1,
+          message: "数量必须是 1 到 999 的整数",
+          source: "麻婆豆腐 -- 12 -- 0",
+        },
+        { sourceLine: 2, message: "菜品名称重复", source: "麻婆豆腐 -- 12 -- 2" },
+      ],
+    });
   });
 });

@@ -61,6 +61,7 @@ export function parseMenuImportText(text: string): ImportParseResult<ParsedMenuI
       errors.push({ sourceLine, message: "菜品名称重复", source });
       return;
     }
+    seenNames.add(name);
 
     const priceCents = parsePrice(priceText);
     if (priceCents === undefined) {
@@ -68,7 +69,6 @@ export function parseMenuImportText(text: string): ImportParseResult<ParsedMenuI
       return;
     }
 
-    seenNames.add(name);
     items.push({ name, priceCents, sourceLine });
   });
 
@@ -99,6 +99,7 @@ export function parseOrderImportText(text: string): ImportParseResult<ParsedOrde
       errors.push({ sourceLine, message: "菜品名称重复", source });
       return;
     }
+    seenNames.add(name);
 
     const priceCents = parsePrice(priceText);
     if (priceCents === undefined) {
@@ -112,7 +113,6 @@ export function parseOrderImportText(text: string): ImportParseResult<ParsedOrde
       return;
     }
 
-    seenNames.add(name);
     items.push({ name, priceCents, quantity, sourceLine });
   });
 
