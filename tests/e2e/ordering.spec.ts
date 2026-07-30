@@ -13,7 +13,7 @@ function dishCard(page: import("playwright/test").Page, name: string) {
   return page.getByRole("article").filter({ has: page.getByRole("heading", { name }) });
 }
 
-test("supports collaborative ordering, offline replay, history, and admin menu preview", async ({ browser }) => {
+test("supports collaborative ordering, administrator imports, cross-device totals, and order locking", async ({ browser }) => {
   const zhangContext = await browser.newContext();
   const zhangPage = await zhangContext.newPage();
   await enterName(zhangPage, "张三");
@@ -51,26 +51,76 @@ test("supports collaborative ordering, offline replay, history, and admin menu p
   await zhangPage.getByRole("button", { name: "订单总览" }).click();
   await zhangPage.getByRole("button", { name: "历史订单" }).click();
   await expect(zhangPage.getByRole("heading", { name: "历史订单" })).toBeVisible();
+  await zhangPage.goto(appUrl);
+  await expect(zhangFish).toBeVisible();
 
-  await zhangPage.goto(`${appUrl}/admin`);
-  await zhangPage.getByLabel("管理员密码").fill("e2e-admin-password");
-  await zhangPage.getByRole("button", { name: "登录管理后台" }).click();
-  await expect(zhangPage.getByRole("heading", { name: "管理设置" })).toBeVisible();
+  const adminContext = await browser.newContext();
+  const adminPage = await adminContext.newPage();
+  await enterName(adminPage, "管理员");
+  await adminPage.goto(`${appUrl}/admin`);
+  await adminPage.getByLabel("管理员密码").fill("e2e-admin-password");
+  await adminPage.getByRole("button", { name: "登录管理后台" }).click();
+  await expect(adminPage.getByRole("heading", { name: "管理设置" })).toBeVisible();
+  const menuPanel = adminPage.getByRole("region", { name: "菜单管理" });
+  const orderPanel = adminPage.getByRole("region", { name: "已点订单管理" });
 
-  await zhangPage.getByRole("button", { name: "加载所选订单" }).click();
-  await expect(zhangPage.getByText("张三", { exact: true })).toBeVisible();
-  await zhangPage.getByRole("button", { name: "锁定所选订单" }).click();
-  await expect(zhangPage.getByRole("button", { name: "解锁所选订单" })).toBeVisible();
-  await expect(zhangPage.getByRole("spinbutton", { name: "张三的酸菜鱼数量" })).toBeDisabled();
-  await zhangPage.getByRole("button", { name: "解锁所选订单" }).click();
-  const correctedQuantity = zhangPage.getByRole("spinbutton", { name: "张三的酸菜鱼数量" });
+  await orderPanel.getByRole("button", { name: "加载所选订单" }).click();
+  await expect(orderPanel.getByText("张三", { exact: true })).toBeVisible();
+  await orderPanel.getByRole("button", { name: "锁定所选订单" }).click();
+  await expect(orderPanel.getByRole("button", { name: "解锁所选订单" })).toBeVisible();
+  await expect(orderPanel.getByRole("spinbutton", { name: "张三的酸菜鱼数量" })).toBeDisabled();
+  await orderPanel.getByRole("button", { name: "解锁所选订单" }).click();
+  const correctedQuantity = orderPanel.getByRole("spinbutton", { name: "张三的酸菜鱼数量" });
   await correctedQuantity.fill("1");
-  await zhangPage.getByRole("button", { name: "保存张三的酸菜鱼数量" }).click();
-  await expect(zhangPage.getByText("张三 的贡献数量已保存")).toBeVisible();
+  await orderPanel.getByRole("button", { name: "保存张三的酸菜鱼数量" }).click();
+  await expect(orderPanel.getByText("贡献数量已保存")).toBeVisible();
 
-  await zhangPage.getByLabel("Markdown 菜单").fill("- 酸菜鱼 | 68\n- 米饭 | 2");
-  await expect(zhangPage.getByText("预览 2 道菜")).toBeVisible();
+  await menuPanel.getByLabel("批量菜单文本").fill("黄瓜火腿 -- 12");
+  await expect(menuPanel.getByText("预览 1 道菜")).toBeVisible();
+  await menuPanel.getByRole("button", { name: "准备覆盖菜单" }).click();
+  await menuPanel.getByRole("button", { name: "确认覆盖 1 道菜" }).click();
+  await expect(menuPanel.getByText("已覆盖 1 道菜")).toBeVisible();
 
+  const zhangCucumber = dishCard(zhangPage, "黄瓜火腿");
+  const liCucumber = dishCard(liPage, "黄瓜火腿");
+  await expect(zhangCucumber).toBeVisible({ timeout: 3_000 });
+  await expect(liCucumber).toBeVisible({ timeout: 3_000 });
+
+  await orderPanel.getByRole("button", { name: "加载所选订单" }).click();
+  await orderPanel.getByLabel("批量已点订单文本").fill("黄瓜火腿 -- 12 -- 3");
+  await expect(orderPanel.getByText("共 3 份 · ¥36.00")).toBeVisible();
+  await orderPanel.getByRole("button", { name: "准备覆盖已点订单" }).click();
+  await orderPanel.getByRole("button", { name: "确认覆盖已点订单" }).click();
+  await expect(zhangCucumber.getByText("共 3 份")).toBeVisible({ timeout: 3_000 });
+  await expect(liCucumber.getByText("共 3 份")).toBeVisible({ timeout: 3_000 });
+
+  await liCucumber.getByRole("button", { name: "增加黄瓜火腿" }).click();
+  await expect(liCucumber.getByText("共 4 份")).toBeVisible();
+  await expect(zhangCucumber.getByText("共 4 份")).toBeVisible({ timeout: 3_000 });
+
+  await orderPanel.getByRole("button", { name: "删除黄瓜火腿" }).click();
+  await orderPanel.getByRole("button", { name: "确认删除黄瓜火腿" }).click();
+  await expect(zhangCucumber.getByText("共 0 份")).toBeVisible({ timeout: 3_000 });
+  await expect(liCucumber.getByText("共 0 份")).toBeVisible({ timeout: 3_000 });
+
+  await menuPanel.getByLabel("单项菜品名称").fill("麻婆豆腐");
+  await menuPanel.getByLabel("单项菜品价格").fill("12");
+  await menuPanel.getByRole("button", { name: "添加菜品" }).click();
+  await expect(menuPanel.getByRole("button", { name: "删除麻婆豆腐" })).toBeVisible();
+  await menuPanel.getByRole("button", { name: "删除麻婆豆腐" }).click();
+  await menuPanel.getByRole("button", { name: "确认删除麻婆豆腐" }).click();
+
+  await orderPanel.getByRole("button", { name: "锁定所选订单" }).click();
+  await expect(zhangCucumber.getByRole("button", { name: "增加黄瓜火腿" })).toBeDisabled({ timeout: 3_000 });
+  await expect(zhangCucumber.getByRole("button", { name: "减少黄瓜火腿" })).toBeDisabled();
+  await orderPanel.getByRole("button", { name: "解锁所选订单" }).click();
+  await expect(zhangCucumber.getByRole("button", { name: "增加黄瓜火腿" })).toBeEnabled({ timeout: 3_000 });
+
+  await menuPanel.getByLabel("清空菜单确认短语").fill("清空全部菜单");
+  await menuPanel.getByRole("button", { name: "确认清空全部菜单" }).click();
+  await expect(liPage.getByText("没有找到相关菜品")).toBeVisible({ timeout: 3_000 });
+
+  await adminContext.close();
   await liContext.close();
   await zhangContext.close();
 });

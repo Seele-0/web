@@ -35,6 +35,36 @@ it("renders the warm menu without exposing orderer names and supports interactio
   expect(shareCount).toHaveAttribute("max", "100");
 });
 
+it("shows the aggregate imported total between the quantity controls while preserving the current user's adjustment controls", async () => {
+  const onAdjust = vi.fn();
+  const importedOrder = {
+    ...order,
+    totalQuantity: 4,
+    totalCents: 27200,
+    dishes: [{
+      ...order.dishes[0],
+      quantity: 4,
+      subtotalCents: 27200,
+      contributors: [
+        { deviceId: "admin-import", displayName: "管理员导入", quantity: 3 },
+        { deviceId: "device-a", displayName: "张三", quantity: 1 },
+      ],
+    }],
+  };
+
+  render(<MenuPage restaurantName="今日点餐" date="2026年7月30日" displayName="张三" deviceId="device-a" status="synced" menu={menu} order={importedOrder} onAdjust={onAdjust} onShareCount={vi.fn()} onOverview={vi.fn()} onEditName={vi.fn()} />);
+
+  const controls = screen.getByLabelText("酸菜鱼数量");
+  expect(controls).toHaveTextContent("4");
+  expect(screen.getByLabelText("酸菜鱼总数量")).toHaveTextContent("4");
+  expect(screen.getByText("共 4 份 · 你点了 1 份")).toBeInTheDocument();
+
+  await userEvent.click(screen.getByRole("button", { name: "增加酸菜鱼" }));
+  await userEvent.click(screen.getByRole("button", { name: "减少酸菜鱼" }));
+  expect(onAdjust).toHaveBeenNthCalledWith(1, "fish", 1);
+  expect(onAdjust).toHaveBeenNthCalledWith(2, "fish", -1);
+});
+
 it("lets users clear the share count and only saves a valid value after confirmation", async () => {
   const user = userEvent.setup();
   const onShareCount = vi.fn();
