@@ -7,10 +7,10 @@ const menu = [{ id: "dish-1", name: "酸菜鱼", priceCents: 6800, sortOrder: 1,
 
 function fakeApi() {
   return {
-    bootstrap: vi.fn().mockResolvedValue({ restaurantName: "今日点餐", menu, order: emptyOrder }),
+    bootstrap: vi.fn().mockResolvedValue({ restaurantName: "今日点餐", menu, configurationRevision: 0, order: emptyOrder }),
     adjust: vi.fn().mockResolvedValue({ ...emptyOrder, revision: 1, totalQuantity: 1, totalCents: 6800, dishes: [{ menuItemId: "dish-1", name: "酸菜鱼", priceCents: 6800, quantity: 1, subtotalCents: 6800, contributors: [{ deviceId: "device-a", displayName: "张三", quantity: 1 }] }] }),
     setShareCount: vi.fn(),
-    changes: vi.fn().mockResolvedValue({ changed: false, revision: 0 }),
+    changes: vi.fn().mockResolvedValue({ changed: false, revision: 0, configurationRevision: 0 }),
     history: vi.fn(),
     historyDetail: vi.fn(),
   };
@@ -20,14 +20,56 @@ describe("useOrderSync", () => {
   beforeEach(() => { localStorage.clear(); vi.useFakeTimers(); });
   afterEach(() => vi.useRealTimers());
 
-  it("polls every two seconds while visible and refreshes on focus", async () => {
+  it("polls every second while visible and refreshes on focus", async () => {
     const api = fakeApi();
     renderHook(() => useOrderSync({ deviceId: "device-a", displayName: "张三", api }));
     await act(async () => { await Promise.resolve(); });
-    await act(async () => { vi.advanceTimersByTime(2000); await Promise.resolve(); });
+    await act(async () => { vi.advanceTimersByTime(1000); await Promise.resolve(); });
     expect(api.changes).toHaveBeenCalled();
     act(() => window.dispatchEvent(new Event("focus")));
     expect(api.changes.mock.calls.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("applies restaurant and menu changes without reloading the page", async () => {
+    const api = fakeApi();
+    const updatedMenu = [{ id: "dish-2", name: "麻婆豆腐", priceCents: 1200, sortOrder: 1, active: true }];
+    api.changes.mockResolvedValueOnce({
+      changed: false,
+      revision: 0,
+      configurationRevision: 1,
+      configuration: { restaurantName: "彭记小炒", menu: updatedMenu },
+    });
+    const { result } = renderHook(() => useOrderSync({ deviceId: "device-a", displayName: "张三", api }));
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+
+    await act(async () => {
+      vi.advanceTimersByTime(1000);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(api.changes).toHaveBeenCalledWith("2026-07-30", 0, 0);
+    expect(result.current.restaurantName).toBe("彭记小炒");
+    expect(result.current.menu).toEqual(updatedMenu);
+  });
+
+  it("coalesces concurrent polling triggers into one request", async () => {
+    const api = fakeApi();
+    let resolveChanges!: (value: { changed: false; revision: number; configurationRevision: number }) => void;
+    api.changes.mockImplementationOnce(() => new Promise((resolve) => { resolveChanges = resolve; }));
+    renderHook(() => useOrderSync({ deviceId: "device-a", displayName: "张三", api }));
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+
+    act(() => {
+      window.dispatchEvent(new Event("focus"));
+      window.dispatchEvent(new Event("focus"));
+    });
+    expect(api.changes).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      resolveChanges({ changed: false, revision: 0, configurationRevision: 0 });
+      await Promise.resolve();
+    });
   });
 
   it("applies an optimistic addition and reconciles the server snapshot", async () => {

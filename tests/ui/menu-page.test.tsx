@@ -20,6 +20,7 @@ it("renders the warm menu without exposing orderer names and supports interactio
   expect(screen.getByText("酸菜鱼")).toBeInTheDocument();
   expect(screen.getByText("¥68.00")).toBeInTheDocument();
   expect(screen.queryByText("李四")).not.toBeInTheDocument();
+  expect(screen.getByLabelText("酸菜鱼总数量")).toHaveTextContent("2");
   expect(screen.getByRole("button", { name: "减少酸菜鱼" })).toBeDisabled();
   await userEvent.click(screen.getByRole("button", { name: "增加酸菜鱼" }));
   expect(onAdjust).toHaveBeenCalledWith("fish", 1);

@@ -32,6 +32,7 @@ describe("order APIs", () => {
     expect(response.status).toBe(200);
     const body = await response.json() as Record<string, any>;
     expect(body.restaurantName).toBe("今日点餐");
+    expect(body.configurationRevision).toBe(0);
     expect(body.menu).toHaveLength(5);
     expect(body.order).toMatchObject({ orderDate: today, revision: 0 });
   });
@@ -45,9 +46,52 @@ describe("order APIs", () => {
   it("returns unchanged polling state when revision matches", async () => {
     await adjust(context(adjustRequest("api-op-1")));
     const response = await changes(context(new Request(
-      `https://example.test/api/order/changes?date=${today}&since=1`,
+      `https://example.test/api/order/changes?date=${today}&since=1&configurationSince=0`,
     )));
-    expect(await response.json()).toEqual({ changed: false, revision: 1 });
+    expect(await response.json()).toEqual({ changed: false, revision: 1, configurationRevision: 0 });
+  });
+
+  it("returns updated menu configuration during polling", async () => {
+    await env.DB.prepare(
+      "INSERT INTO settings (key, value, updated_at) VALUES ('menu_revision', '2', CURRENT_TIMESTAMP)",
+    ).run();
+    const response = await changes(context(new Request(
+      `https://example.test/api/order/changes?date=${today}&since=0&configurationSince=0`,
+    )));
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      changed: false,
+      revision: 0,
+      configurationRevision: 2,
+      configuration: {
+        restaurantName: "今日点餐",
+        menu: expect.arrayContaining([expect.objectContaining({ name: "酸菜鱼" })]),
+      },
+    });
+  });
+
+  it("does not read contribution rows when polling revisions are unchanged", async () => {
+    const preparedSql: string[] = [];
+    const fakeDb = {
+      prepare(sql: string) {
+        preparedSql.push(sql);
+        if (sql.includes("order_contributions")) throw new Error("full snapshot should not be queried");
+        return {
+          bind() { return this; },
+          first: async () => ({ revision: 3, configuration_revision: 4 }),
+          all: async () => ({ results: [] }),
+        };
+      },
+    } as unknown as D1Database;
+    const response = await changes({
+      request: new Request(`https://example.test/api/order/changes?date=${today}&since=3&configurationSince=4`),
+      env: { ...env, DB: fakeDb },
+      params: {},
+    } as unknown as EventContext<Cloudflare.Env, string, Record<string, string>>);
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ changed: false, revision: 3, configurationRevision: 4 });
+    expect(preparedSql.some((sql) => sql.includes("order_contributions"))).toBe(false);
   });
 
   it("rejects ordinary writes to a past date", async () => {

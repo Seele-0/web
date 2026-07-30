@@ -59,6 +59,7 @@ describe("administrator APIs", () => {
     expect((await renameRestaurant(context(jsonRequest("/api/admin/settings/restaurant-name", "PUT", { restaurantName: "暖味小馆" }, cookie)))).status).toBe(200);
     expect((await lockOrder(context(jsonRequest("/api/admin/order/lock", "PUT", { orderDate: "2026-07-30", locked: true }, cookie)))).status).toBe(200);
     expect((await env.DB.prepare("SELECT value FROM settings WHERE key = 'restaurant_name'").first<any>())?.value).toBe("暖味小馆");
+    expect((await env.DB.prepare("SELECT value FROM settings WHERE key = 'menu_revision'").first<any>())?.value).toBe("1");
     expect((await getOrderSnapshot(env.DB, "2026-07-30")).locked).toBe(true);
   });
 

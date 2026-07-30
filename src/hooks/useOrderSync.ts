@@ -6,6 +6,9 @@ import type { MenuItem } from "../domain/types";
 import type { SyncState } from "../components/SyncStatus";
 
 type Identity = { deviceId: string; displayName: string };
+const VISIBLE_POLL_INTERVAL_MS = 1_000;
+const HIDDEN_POLL_INTERVAL_MS = 15_000;
+const MAX_POLL_BACKOFF_MS = 30_000;
 
 function optimisticAdjust(order: OrderSnapshot, menu: MenuItem[], identity: Identity, menuItemId: string, delta: 1 | -1): OrderSnapshot {
   const item = menu.find((entry) => entry.id === menuItemId);
@@ -40,16 +43,40 @@ export function useOrderSync(identity: Identity & { api?: OrderingApi }) {
   const [status, setStatus] = useState<SyncState>(navigator.onLine ? "syncing" : "offline");
   const orderRef = useRef(order); orderRef.current = order;
   const dateRef = useRef(date); dateRef.current = date;
+  const configurationRevisionRef = useRef(0);
+  const pollRunningRef = useRef(false);
+  const pollFailuresRef = useRef(0);
 
-  const applyBootstrap = useCallback((value: BootstrapResponse) => { setRestaurantName(value.restaurantName); setMenu(value.menu); setOrder(value.order); orderRef.current = value.order; }, []);
+  const applyBootstrap = useCallback((value: BootstrapResponse) => {
+    setRestaurantName(value.restaurantName);
+    setMenu(value.menu);
+    setOrder(value.order);
+    orderRef.current = value.order;
+    configurationRevisionRef.current = value.configurationRevision ?? 0;
+  }, []);
   const refresh = useCallback(async () => { const value = await api.bootstrap(date); applyBootstrap(value); setStatus("synced"); }, [api, date, applyBootstrap]);
   const poll = useCallback(async () => {
-    if (!navigator.onLine || !orderRef.current) return;
+    if (!navigator.onLine || !orderRef.current || pollRunningRef.current) return;
+    pollRunningRef.current = true;
     try {
-      const result = await api.changes(date, orderRef.current.revision);
-      if (result.changed) { setOrder(result.order); orderRef.current = result.order; }
+      const result = await api.changes(date, orderRef.current.revision, configurationRevisionRef.current);
+      if (result.changed && result.order && result.order.revision >= orderRef.current.revision) {
+        setOrder(result.order);
+        orderRef.current = result.order;
+      }
+      if (result.configuration) {
+        setRestaurantName(result.configuration.restaurantName);
+        setMenu(result.configuration.menu);
+      }
+      configurationRevisionRef.current = result.configurationRevision;
+      pollFailuresRef.current = 0;
       setStatus("synced");
-    } catch { setStatus("failed"); }
+    } catch {
+      pollFailuresRef.current += 1;
+      setStatus("failed");
+    } finally {
+      pollRunningRef.current = false;
+    }
   }, [api, date]);
 
   const sendOperation = useCallback(async (operation: PendingOperation) => {
@@ -82,11 +109,17 @@ export function useOrderSync(identity: Identity & { api?: OrderingApi }) {
   useEffect(() => {
     void refresh().then(replay).catch(() => setStatus(navigator.onLine ? "failed" : "offline"));
     let timer: number;
-    const schedule = () => { window.clearTimeout(timer); timer = window.setTimeout(async () => {
-      const currentDate = getShanghaiBusinessDate();
-      if (currentDate !== dateRef.current) { setDate(currentDate); return; }
-      await poll(); schedule();
-    }, document.hidden ? 10_000 : 2_000); };
+    const schedule = () => {
+      window.clearTimeout(timer);
+      const baseDelay = document.hidden ? HIDDEN_POLL_INTERVAL_MS : VISIBLE_POLL_INTERVAL_MS;
+      const delay = Math.min(baseDelay * 2 ** pollFailuresRef.current, MAX_POLL_BACKOFF_MS);
+      timer = window.setTimeout(async () => {
+        const currentDate = getShanghaiBusinessDate();
+        if (currentDate !== dateRef.current) { setDate(currentDate); return; }
+        await poll();
+        schedule();
+      }, delay);
+    };
     schedule();
     const online = () => void replay();
     const offline = () => setStatus("offline");

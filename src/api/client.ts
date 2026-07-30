@@ -3,17 +3,23 @@ import type { MenuItem } from "../domain/types";
 export type Contributor = { deviceId: string; displayName: string; quantity: number };
 export type DishSnapshot = { menuItemId: string; name: string; priceCents: number; quantity: number; subtotalCents: number; contributors: Contributor[] };
 export type OrderSnapshot = { orderDate: string; shareCount: number; revision: number; locked: boolean; totalQuantity: number; totalCents: number; dishes: DishSnapshot[] };
-export type BootstrapResponse = { restaurantName: string; menu: MenuItem[]; order: OrderSnapshot };
+export type BootstrapResponse = { restaurantName: string; menu: MenuItem[]; configurationRevision: number; order: OrderSnapshot };
 export type AdjustRequest = { operationId: string; orderDate: string; menuItemId: string; deviceId: string; displayName: string; delta: 1 | -1 };
 export type ShareCountRequest = { operationId: string; orderDate: string; deviceId: string; displayName: string; shareCount: number };
-export type ChangesResponse = { changed: false; revision: number } | { changed: true; revision: number; order: OrderSnapshot };
+export type ChangesResponse = {
+  changed: boolean;
+  revision: number;
+  order?: OrderSnapshot;
+  configurationRevision: number;
+  configuration?: { restaurantName: string; menu: MenuItem[] };
+};
 export type HistorySummary = Pick<OrderSnapshot, "orderDate" | "shareCount" | "revision" | "locked" | "totalQuantity" | "totalCents">;
 export type AdminContributionRequest = Pick<Contributor, "deviceId" | "displayName" | "quantity"> & { orderDate: string; menuItemId: string };
 
 export class ApiError extends Error { constructor(message: string, public status: number, public code?: string) { super(message); } }
 
 async function requestJson<T>(url: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(url, { credentials: "same-origin", ...init });
+  const response = await fetch(url, { credentials: "same-origin", cache: "no-store", ...init });
   const body = await response.json().catch(() => ({})) as { error?: { message?: string; code?: string } };
   if (!response.ok) throw new ApiError(body?.error?.message ?? "请求失败", response.status, body?.error?.code);
   return body as T;
@@ -24,7 +30,9 @@ export const apiClient = {
   bootstrap: (_date: string) => requestJson<BootstrapResponse>("/api/bootstrap"),
   adjust: (input: AdjustRequest) => requestJson<OrderSnapshot>("/api/order/adjust", jsonInit("POST", input)),
   setShareCount: (input: ShareCountRequest) => requestJson<OrderSnapshot>("/api/order/share-count", jsonInit("PUT", input)),
-  changes: (date: string, revision: number) => requestJson<ChangesResponse>(`/api/order/changes?date=${encodeURIComponent(date)}&since=${revision}`),
+  changes: (date: string, revision: number, configurationRevision: number) => requestJson<ChangesResponse>(
+    `/api/order/changes?date=${encodeURIComponent(date)}&since=${revision}&configurationSince=${configurationRevision}`,
+  ),
   history: async () => (await requestJson<{ dates: HistorySummary[] }>("/api/history")).dates,
   historyDetail: (date: string) => requestJson<OrderSnapshot>(`/api/history/${encodeURIComponent(date)}`),
   adminLogin: (password: string) => requestJson<{ authenticated: true }>("/api/admin/login", jsonInit("POST", { password })),

@@ -1,20 +1,51 @@
 import type { Env } from "../../_lib/env";
 import { errorResponse, HttpError, json } from "../../_lib/http";
+import { getMenuConfiguration } from "../../_lib/menu-repository";
 import { getOrderSnapshot } from "../../_lib/order-repository";
+import { getSyncRevisions } from "../../_lib/sync-repository";
 
 export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
   try {
     const url = new URL(request.url);
     const orderDate = url.searchParams.get("date") ?? "";
     const since = Number(url.searchParams.get("since"));
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(orderDate) || !Number.isInteger(since) || since < 0) {
+    const configurationSinceParam = url.searchParams.get("configurationSince");
+    const configurationSince = configurationSinceParam === null ? 0 : Number(configurationSinceParam);
+    if (
+      !/^\d{4}-\d{2}-\d{2}$/.test(orderDate)
+      || !Number.isInteger(since)
+      || since < 0
+      || !Number.isInteger(configurationSince)
+      || configurationSince < 0
+    ) {
       throw new HttpError(400, "invalid_poll_request", "轮询参数无效");
     }
-    const snapshot = await getOrderSnapshot(env.DB, orderDate);
+
+    const revisions = await getSyncRevisions(env.DB, orderDate);
+    const orderChanged = revisions.revision !== since;
+    const configurationChanged = revisions.configurationRevision !== configurationSince;
+
+    if (!orderChanged && !configurationChanged) {
+      return json(
+        { changed: false, revision: revisions.revision, configurationRevision: revisions.configurationRevision },
+        { headers: { "Cache-Control": "no-store" } },
+      );
+    }
+
+    const [order, configuration] = await Promise.all([
+      orderChanged ? getOrderSnapshot(env.DB, orderDate) : Promise.resolve(undefined),
+      configurationChanged ? getMenuConfiguration(env.DB) : Promise.resolve(undefined),
+    ]);
     return json(
-      snapshot.revision === since
-        ? { changed: false, revision: snapshot.revision }
-        : { changed: true, revision: snapshot.revision, order: snapshot },
+      {
+        changed: Boolean(order),
+        revision: order?.revision ?? revisions.revision,
+        ...(order ? { order } : {}),
+        configurationRevision: configuration?.configurationRevision ?? revisions.configurationRevision,
+        ...(configuration
+          ? { configuration: { restaurantName: configuration.restaurantName, menu: configuration.menu } }
+          : {}),
+      },
       { headers: { "Cache-Control": "no-store" } },
     );
   } catch (error) {

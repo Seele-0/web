@@ -31,7 +31,7 @@ export function DishCard({ item, dish, deviceId, locked = false, onAdjust }: Dis
         >
           <span aria-hidden="true">−</span>
         </button>
-        <output aria-label={`你点的${item.name}数量`}>{ownQuantity}</output>
+        <output aria-label={`${item.name}总数量`}>{totalQuantity}</output>
         <button
           type="button"
           className="quantity-button quantity-plus"
