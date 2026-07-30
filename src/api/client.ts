@@ -12,7 +12,7 @@ export type HistorySummary = Pick<OrderSnapshot, "orderDate" | "shareCount" | "r
 export class ApiError extends Error { constructor(message: string, public status: number, public code?: string) { super(message); } }
 
 async function requestJson<T>(url: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(url, init);
+  const response = await fetch(url, { credentials: "same-origin", ...init });
   const body = await response.json().catch(() => ({})) as { error?: { message?: string; code?: string } };
   if (!response.ok) throw new ApiError(body?.error?.message ?? "请求失败", response.status, body?.error?.code);
   return body as T;
@@ -26,5 +26,11 @@ export const apiClient = {
   changes: (date: string, revision: number) => requestJson<ChangesResponse>(`/api/order/changes?date=${encodeURIComponent(date)}&since=${revision}`),
   history: async () => (await requestJson<{ dates: HistorySummary[] }>("/api/history")).dates,
   historyDetail: (date: string) => requestJson<OrderSnapshot>(`/api/history/${encodeURIComponent(date)}`),
+  adminLogin: (password: string) => requestJson<{ authenticated: true }>("/api/admin/login", jsonInit("POST", { password })),
+  adminLogout: () => requestJson<{ authenticated: false }>("/api/admin/logout", { method: "POST" }),
+  adminRenameRestaurant: (restaurantName: string) => requestJson<{ restaurantName: string }>("/api/admin/settings/restaurant-name", jsonInit("PUT", { restaurantName })),
+  adminImportMenu: (markdown: string) => requestJson<{ items: Array<{ name: string; priceCents: number; sourceLine: number }>; errors: [] }>("/api/admin/menu/import", jsonInit("POST", { markdown })),
+  adminClearOrder: (orderDate: string) => requestJson<OrderSnapshot>("/api/admin/order/clear", jsonInit("POST", { orderDate })),
+  adminSetOrderLocked: (orderDate: string, locked: boolean) => requestJson<OrderSnapshot>("/api/admin/order/lock", jsonInit("PUT", { orderDate, locked })),
 };
-export type OrderingApi = typeof apiClient;
+export type OrderingApi = Pick<typeof apiClient, "bootstrap" | "adjust" | "setShareCount" | "changes" | "history" | "historyDetail">;

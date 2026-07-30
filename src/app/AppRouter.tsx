@@ -1,12 +1,14 @@
 import { useEffect, useState } from "react";
 import { MemoryRouter, Navigate, Route, Routes, useInRouterContext, useNavigate, useParams } from "react-router-dom";
 import { apiClient, type HistorySummary, type OrderSnapshot } from "../api/client";
+import { AdminPage } from "../admin/AdminPage";
 import type { SyncState } from "../components/SyncStatus";
 import { HistoryDetailPage } from "../history/HistoryDetailPage";
-import { HistoryListPage, formatOrderDate } from "../history/HistoryListPage";
+import { HistoryListPage } from "../history/HistoryListPage";
 import { MenuPage } from "../menu/MenuPage";
 import { OrderOverviewPage } from "../overview/OrderOverviewPage";
 import type { MenuItem } from "../domain/types";
+import { getShanghaiBusinessDate } from "../domain/date";
 
 type AppRouterProps = {
   restaurantName: string;
@@ -19,6 +21,7 @@ type AppRouterProps = {
   onAdjust: (menuItemId: string, delta: 1 | -1) => void | Promise<void>;
   onShareCount: (shareCount: number) => void | Promise<void>;
   onEditName: () => void;
+  onRefresh?: () => void | Promise<void>;
 };
 
 function HistoryListRoute() {
@@ -84,7 +87,7 @@ function AppRoutes(props: AppRouterProps) {
       } />
       <Route path="/history" element={<HistoryListRoute />} />
       <Route path="/history/:date" element={<HistoryDetailRoute />} />
-      <Route path="/admin" element={<div className="secondary-page"><header className="secondary-header"><button type="button" className="back-button" onClick={() => navigate("/")} aria-label="返回菜单">‹</button><div><p>仅管理员可见</p><h1>管理设置</h1></div><span /></header><p className="secondary-empty">管理功能正在载入</p></div>} />
+      <Route path="/admin" element={<AdminPage orderDate={props.order?.orderDate ?? getShanghaiBusinessDate()} restaurantName={props.restaurantName} locked={props.order?.locked ?? false} onBack={() => navigate("/")} onChanged={props.onRefresh} />} />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   );

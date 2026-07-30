@@ -12,7 +12,7 @@ function formatBusinessDate(value: string): string {
 }
 
 function OrderingApp({ identity, onEditName }: { identity: ActiveIdentity; onEditName: () => void }) {
-  const { restaurantName, menu, order, status, adjust, setShareCount } = useOrderSync(identity);
+  const { restaurantName, menu, order, status, adjust, setShareCount, refresh } = useOrderSync(identity);
 
   return (
     <>
@@ -28,6 +28,7 @@ function OrderingApp({ identity, onEditName }: { identity: ActiveIdentity; onEdi
         onAdjust={adjust}
         onShareCount={setShareCount}
         onEditName={onEditName}
+        onRefresh={refresh}
       />
     </>
   );
