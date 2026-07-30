@@ -1,15 +1,14 @@
 import { verifyAdminRequest } from "../../../_lib/admin-session";
-import { requireOrderDate } from "../../../_lib/admin-input";
 import type { Env } from "../../../_lib/env";
 import { errorResponse, json, readJson } from "../../../_lib/http";
-import { clearOrder } from "../../../_lib/order-repository";
+import { clearMenu } from "../../../_lib/menu-repository";
 
 export const onRequestPost: PagesFunction<Env> = async ({ request, env }) => {
   try {
     await verifyAdminRequest(request, env);
-    const input = await readJson<{ orderDate?: unknown }>(request);
-    const orderDate = requireOrderDate(input.orderDate);
-    return json(await clearOrder(env.DB, { orderDate, now: new Date().toISOString() }));
+    await readJson<Record<string, never>>(request);
+    await clearMenu(env.DB, { now: new Date().toISOString() });
+    return json({ cleared: true });
   } catch (error) {
     return errorResponse(error);
   }
