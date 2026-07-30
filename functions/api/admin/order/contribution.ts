@@ -1,3 +1,4 @@
+import { runAutomaticLockFallback } from "../../../_lib/automatic-lock";
 import { requireIdentifier, requireOrderDate } from "../../../_lib/admin-input";
 import { errorResponse, HttpError, json, readJson } from "../../../_lib/http";
 import { verifyAdminRequest } from "../../../_lib/admin-session";
@@ -7,6 +8,7 @@ import { setAdminContribution } from "../../../_lib/order-repository";
 export const onRequestPut: PagesFunction<Env> = async ({ request, env }) => {
   try {
     await verifyAdminRequest(request, env);
+    await runAutomaticLockFallback(env.DB);
     const input = await readJson<Record<string, unknown>>(request);
     const orderDate = requireOrderDate(input.orderDate);
     const menuItemId = requireIdentifier(input.menuItemId, "invalid_contribution", "贡献修正参数无效");

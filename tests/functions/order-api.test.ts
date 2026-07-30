@@ -1,5 +1,6 @@
 import { env } from "cloudflare:test";
-import { onRequestGet as bootstrap } from "../../functions/api/bootstrap";
+import worker from "../../workers/auto-lock";
+import { createBootstrapHandler, onRequestGet as bootstrap } from "../../functions/api/bootstrap";
 import { onRequestGet as changes } from "../../functions/api/order/changes";
 import { onRequestPost as adjust } from "../../functions/api/order/adjust";
 import { onRequestGet as history } from "../../functions/api/history/index";
@@ -28,6 +29,22 @@ function adjustRequest(operationId: string, orderDate = today) {
 }
 
 describe("order APIs", () => {
+  it("locks the Shanghai business day from the scheduled worker", async () => {
+    await worker.scheduled(
+      { scheduledTime: Date.parse("2026-07-30T15:59:00.000Z"), cron: "59 15 * * *", noRetry() {} } as ScheduledController,
+      env,
+      { waitUntil() {}, passThroughOnException() {} } as unknown as ExecutionContext,
+    );
+    expect((await env.DB.prepare("SELECT locked FROM daily_orders WHERE order_date = ?").bind("2026-07-30").first<{ locked: number }>())?.locked).toBe(1);
+  });
+
+  it("uses request fallback before bootstrapping after the Shanghai cutoff", async () => {
+    const handler = createBootstrapHandler(() => new Date("2026-07-30T16:01:00.000Z"));
+    const response = await handler(context(new Request("https://example.test/api/bootstrap")));
+    expect(response.status).toBe(200);
+    expect((await env.DB.prepare("SELECT locked FROM daily_orders WHERE order_date = ?").bind("2026-07-30").first<{ locked: number }>())?.locked).toBe(1);
+    expect((await env.DB.prepare("SELECT COUNT(*) AS count FROM automatic_order_locks WHERE order_date = ? AND source = 'request_fallback'").bind("2026-07-30").first<{ count: number }>())?.count).toBe(1);
+  });
   it("bootstraps restaurant, active menu, and today's order", async () => {
     const response = await bootstrap(context(new Request("https://example.test/api/bootstrap")));
     expect(response.status).toBe(200);
@@ -79,10 +96,13 @@ describe("order APIs", () => {
         if (sql.includes("order_contributions")) throw new Error("full snapshot should not be queried");
         return {
           bind() { return this; },
-          first: async () => ({ revision: 3, configuration_revision: 4 }),
+          first: async () => sql.includes("automatic_order_locks")
+            ? ({ execution_token: "another-runner" })
+            : ({ revision: 3, configuration_revision: 4 }),
           all: async () => ({ results: [] }),
         };
       },
+      batch: async () => [],
     } as unknown as D1Database;
     const response = await changes({
       request: new Request(`https://example.test/api/order/changes?date=${today}&since=3&configurationSince=4`),

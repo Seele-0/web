@@ -1,3 +1,4 @@
+import { runAutomaticLockFallback } from "../../../_lib/automatic-lock";
 import { verifyAdminRequest } from "../../../_lib/admin-session";
 import { requireOrderDate } from "../../../_lib/admin-input";
 import type { Env } from "../../../_lib/env";
@@ -7,6 +8,7 @@ import { replaceOrderFromText } from "../../../_lib/order-repository";
 export const onRequestPost: PagesFunction<Env> = async ({ request, env }) => {
   try {
     await verifyAdminRequest(request, env);
+    await runAutomaticLockFallback(env.DB);
     const input = await readJson<{ orderDate?: unknown; text?: unknown }>(request, 100_000);
     const orderDate = requireOrderDate(input.orderDate);
     if (typeof input.text !== "string") {

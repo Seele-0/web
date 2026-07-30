@@ -1,3 +1,4 @@
+import { runAutomaticLockFallback } from "../../_lib/automatic-lock";
 import type { Env } from "../../_lib/env";
 import { errorResponse, json } from "../../_lib/http";
 
@@ -12,6 +13,7 @@ type HistoryRow = {
 
 export const onRequestGet: PagesFunction<Env> = async ({ env }) => {
   try {
+    await runAutomaticLockFallback(env.DB);
     const result = await env.DB.prepare(
       `SELECT o.order_date, o.share_count, o.revision, o.locked,
               COALESCE(SUM(c.quantity), 0) AS total_quantity,

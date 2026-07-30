@@ -10,6 +10,7 @@
     "test:workers": "vitest run --config vitest.worker.config.ts",
     "test:e2e": "playwright test --config playwright.config.ts",
     "preview:pages": "wrangler pages dev dist --d1 DB=ordering-local-db",
+    "deploy:auto-lock": "wrangler deploy --config wrangler.auto-lock.toml",
     "e2e:serve": "npm run build && node scripts/start-e2e.mjs"
   },
   "keywords": [],
