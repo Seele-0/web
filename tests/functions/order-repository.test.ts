@@ -361,4 +361,119 @@ describe("order repository", () => {
       .toMatchObject({ count: 0 });
   });
 
+  it("checks a locked order before validating replacement text", async () => {
+    await setOrderLocked(env.DB, { orderDate: baseInput.orderDate, locked: true, now: baseInput.now });
+    const locked = await getOrderSnapshot(env.DB, baseInput.orderDate);
+    const menuRevisionBefore = await menuRevision();
+
+    for (const text of ["", "无效格式"]) {
+      await expect(replaceOrderFromText(env.DB, {
+        orderDate: baseInput.orderDate,
+        text,
+        now: "2026-07-30T10:01:00.000Z",
+      })).rejects.toMatchObject({ status: 423, code: "order_locked" } satisfies Partial<HttpError>);
+    }
+
+    expect(await getOrderSnapshot(env.DB, baseInput.orderDate)).toEqual(locked);
+    expect(await menuRevision()).toBe(menuRevisionBefore);
+  });
+
+  it("keeps an active same-name menu price while upserting its supplied daily price", async () => {
+    const snapshot = await upsertAdminOrderItem(env.DB, {
+      orderDate: baseInput.orderDate,
+      name: "酸菜鱼",
+      priceCents: 8800,
+      quantity: 2,
+      now: baseInput.now,
+    });
+
+    expect(snapshot.revision).toBe(1);
+    expect(snapshot.dishes).toEqual([expect.objectContaining({
+      menuItemId: baseInput.menuItemId,
+      priceCents: 8800,
+      quantity: 2,
+    })]);
+    expect(await env.DB.prepare("SELECT price_cents, active FROM menu_items WHERE id = ?").bind(baseInput.menuItemId).first())
+      .toMatchObject({ price_cents: 6800, active: 1 });
+    expect(await menuRevision()).toBe(0);
+  });
+
+  it("reactivates an inactive same-name menu item while upserting its supplied price", async () => {
+    await env.DB.prepare("UPDATE menu_items SET active = 0 WHERE id = ?").bind(baseInput.menuItemId).run();
+
+    const snapshot = await upsertAdminOrderItem(env.DB, {
+      orderDate: baseInput.orderDate,
+      name: "酸菜鱼",
+      priceCents: 8800,
+      quantity: 2,
+      now: baseInput.now,
+    });
+
+    expect(snapshot.revision).toBe(1);
+    expect(snapshot.dishes).toEqual([expect.objectContaining({
+      menuItemId: baseInput.menuItemId,
+      priceCents: 8800,
+      quantity: 2,
+    })]);
+    expect(await env.DB.prepare("SELECT price_cents, active FROM menu_items WHERE id = ?").bind(baseInput.menuItemId).first())
+      .toMatchObject({ price_cents: 8800, active: 1 });
+    expect(await menuRevision()).toBe(1);
+  });
+
+  it("does not revise or log when deleting a missing order snapshot", async () => {
+    await setOrderLocked(env.DB, { orderDate: baseInput.orderDate, locked: false, now: baseInput.now });
+    const before = await getOrderSnapshot(env.DB, baseInput.orderDate);
+    const deleteLogCount = await env.DB.prepare(
+      "SELECT COUNT(*) AS count FROM activity_log WHERE action = 'delete_order_item'",
+    ).first<{ count: number }>();
+
+    const snapshot = await deleteOrderItem(env.DB, {
+      orderDate: baseInput.orderDate,
+      menuItemId: baseInput.menuItemId,
+      now: "2026-07-30T10:01:00.000Z",
+    });
+
+    expect(snapshot).toEqual(before);
+    expect(await env.DB.prepare(
+      "SELECT COUNT(*) AS count FROM activity_log WHERE action = 'delete_order_item'",
+    ).first()).toMatchObject({ count: deleteLogCount?.count ?? 0 });
+  });
+
+  it("retains another contributor and its snapshot when one admin contribution is set to zero", async () => {
+    await setAdminContribution(env.DB, {
+      orderDate: baseInput.orderDate,
+      menuItemId: baseInput.menuItemId,
+      deviceId: "device-a",
+      displayName: "张三",
+      quantity: 2,
+      now: baseInput.now,
+    });
+    await setAdminContribution(env.DB, {
+      orderDate: baseInput.orderDate,
+      menuItemId: baseInput.menuItemId,
+      deviceId: "device-b",
+      displayName: "李四",
+      quantity: 3,
+      now: "2026-07-30T10:01:00.000Z",
+    });
+
+    const snapshot = await setAdminContribution(env.DB, {
+      orderDate: baseInput.orderDate,
+      menuItemId: baseInput.menuItemId,
+      deviceId: "device-a",
+      displayName: "张三",
+      quantity: 0,
+      now: "2026-07-30T10:02:00.000Z",
+    });
+
+    expect(snapshot.dishes).toEqual([expect.objectContaining({
+      menuItemId: baseInput.menuItemId,
+      quantity: 3,
+      contributors: [{ deviceId: "device-b", displayName: "李四", quantity: 3 }],
+    })]);
+    expect(await env.DB.prepare(
+      "SELECT COUNT(*) AS count FROM order_items WHERE order_date = ? AND menu_item_id = ?",
+    ).bind(baseInput.orderDate, baseInput.menuItemId).first()).toMatchObject({ count: 1 });
+  });
+
 });

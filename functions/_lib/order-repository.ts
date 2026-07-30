@@ -330,6 +330,7 @@ export async function setShareCount(db: D1Database, input: ShareCountInput): Pro
 }
 
 export async function replaceOrderFromText(db: D1Database, input: ReplaceOrderInput): Promise<OrderSnapshot> {
+  assertUnlocked(await getOrderRow(db, input.orderDate));
   const parsed = parseOrderImportText(input.text);
   if (parsed.errors.length > 0 || parsed.items.length === 0) {
     throw new HttpError(400, "invalid_order_text", parsed.errors[0]?.message ?? "订单不能为空");
@@ -338,7 +339,6 @@ export async function replaceOrderFromText(db: D1Database, input: ReplaceOrderIn
     throw new HttpError(400, "invalid_order_text", "菜品名称长度必须为 1 到 80 个字符");
   }
 
-  assertUnlocked(await getOrderRow(db, input.orderDate));
   const menuItems = await resolveAdminMenuItems(db, parsed.items);
   const menuChanged = menuItems.some((item) => item.needsMenuWrite);
   const statements: D1PreparedStatement[] = [
