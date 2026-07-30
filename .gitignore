@@ -8,3 +8,7 @@ dist/
 .superpowers/
 .DS_Store
 coverage/
+
+.worktrees/
+
+.worktrees/
