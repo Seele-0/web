@@ -1,9 +1,11 @@
+import { runAutomaticLockFallback } from "../../_lib/automatic-lock";
 import type { Env } from "../../_lib/env";
 import { errorResponse, HttpError, json } from "../../_lib/http";
 import { getOrderSnapshot } from "../../_lib/order-repository";
 
 export const onRequestGet: PagesFunction<Env> = async ({ env, params }) => {
   try {
+    await runAutomaticLockFallback(env.DB);
     const orderDate = typeof params.date === "string" ? params.date : "";
     if (!/^\d{4}-\d{2}-\d{2}$/.test(orderDate)) {
       throw new HttpError(400, "invalid_date", "订单日期格式无效");

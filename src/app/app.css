@@ -1120,3 +1120,24 @@ input:focus-visible {
     grid-template-columns: minmax(0, 1fr) auto;
   }
 }
+
+.admin-subsection {
+  margin-top: 18px;
+  padding-top: 16px;
+  border-top: 1px solid rgba(37, 35, 31, 0.09);
+}
+.admin-subsection h3 { margin: 0 0 11px; font-size: 1rem; }
+.menu-import-panel { margin-top: 0; }
+.menu-import-panel textarea, .order-import-panel textarea { width: 100%; box-sizing: border-box; }
+.menu-add-form, .order-add-form { align-items: end; }
+.menu-add-form label, .order-add-form label { display: grid; gap: 6px; min-width: 0; font-size: .84rem; font-weight: 700; }
+.managed-item-row { display: flex; gap: 12px; align-items: center; justify-content: space-between; padding: 10px 0; border-top: 1px solid rgba(37,35,31,.07); }
+.managed-item-row > span:first-child { display: grid; gap: 3px; min-width: 0; }
+.managed-item-row small { color: var(--muted); }
+.inline-confirm { display: flex; gap: 7px; align-items: center; }
+.clear-menu-panel { padding: 14px; border-radius: 12px; }
+.clear-menu-panel label, .order-import-panel > label, .admin-subsection > label { display: grid; gap: 6px; }
+@media (max-width: 619px) {
+  .menu-add-form, .order-add-form { grid-template-columns: 1fr; }
+  .managed-item-row { align-items: flex-start; }
+}

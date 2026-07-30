@@ -17,7 +17,7 @@ function fakeApi() {
 }
 
 describe("useOrderSync", () => {
-  beforeEach(() => { localStorage.clear(); vi.useFakeTimers(); });
+  beforeEach(() => { localStorage.clear(); vi.useFakeTimers(); vi.setSystemTime(new Date("2026-07-30T12:00:00.000Z")); });
   afterEach(() => vi.useRealTimers());
 
   it("polls every second while visible and refreshes on focus", async () => {

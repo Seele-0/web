@@ -87,7 +87,7 @@ function AppRoutes(props: AppRouterProps) {
       } />
       <Route path="/history" element={<HistoryListRoute />} />
       <Route path="/history/:date" element={<HistoryDetailRoute />} />
-      <Route path="/admin" element={<AdminPage orderDate={props.order?.orderDate ?? getShanghaiBusinessDate()} restaurantName={props.restaurantName} locked={props.order?.locked ?? false} onBack={() => navigate("/")} onChanged={props.onRefresh} />} />
+      <Route path="/admin" element={<AdminPage orderDate={props.order?.orderDate ?? getShanghaiBusinessDate()} restaurantName={props.restaurantName} menu={props.menu} locked={props.order?.locked ?? false} onBack={() => navigate("/")} onChanged={props.onRefresh} />} />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   );

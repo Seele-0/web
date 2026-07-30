@@ -1,3 +1,4 @@
+import { runAutomaticLockFallback } from "../../_lib/automatic-lock";
 import type { Env } from "../../_lib/env";
 import { errorResponse, HttpError, json } from "../../_lib/http";
 import { getMenuConfiguration } from "../../_lib/menu-repository";
@@ -6,6 +7,7 @@ import { getSyncRevisions } from "../../_lib/sync-repository";
 
 export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
   try {
+    await runAutomaticLockFallback(env.DB);
     const url = new URL(request.url);
     const orderDate = url.searchParams.get("date") ?? "";
     const since = Number(url.searchParams.get("since"));

@@ -1,8 +1,10 @@
 import { env } from "cloudflare:test";
-import { onRequestGet as bootstrap } from "../../functions/api/bootstrap";
+import worker from "../../workers/auto-lock";
+import { createBootstrapHandler, onRequestGet as bootstrap } from "../../functions/api/bootstrap";
 import { onRequestGet as changes } from "../../functions/api/order/changes";
 import { onRequestPost as adjust } from "../../functions/api/order/adjust";
 import { onRequestGet as history } from "../../functions/api/history/index";
+import { onRequestGet as historyDetail } from "../../functions/api/history/[date]";
 import { getShanghaiBusinessDate } from "../../functions/_lib/date";
 
 const today = getShanghaiBusinessDate();
@@ -27,6 +29,22 @@ function adjustRequest(operationId: string, orderDate = today) {
 }
 
 describe("order APIs", () => {
+  it("locks the Shanghai business day from the scheduled worker", async () => {
+    await worker.scheduled(
+      { scheduledTime: Date.parse("2026-07-30T15:59:00.000Z"), cron: "59 15 * * *", noRetry() {} } as ScheduledController,
+      env,
+      { waitUntil() {}, passThroughOnException() {} } as unknown as ExecutionContext,
+    );
+    expect((await env.DB.prepare("SELECT locked FROM daily_orders WHERE order_date = ?").bind("2026-07-30").first<{ locked: number }>())?.locked).toBe(1);
+  });
+
+  it("uses request fallback before bootstrapping after the Shanghai cutoff", async () => {
+    const handler = createBootstrapHandler(() => new Date("2026-07-30T16:01:00.000Z"));
+    const response = await handler(context(new Request("https://example.test/api/bootstrap")));
+    expect(response.status).toBe(200);
+    expect((await env.DB.prepare("SELECT locked FROM daily_orders WHERE order_date = ?").bind("2026-07-30").first<{ locked: number }>())?.locked).toBe(1);
+    expect((await env.DB.prepare("SELECT COUNT(*) AS count FROM automatic_order_locks WHERE order_date = ? AND source = 'request_fallback'").bind("2026-07-30").first<{ count: number }>())?.count).toBe(1);
+  });
   it("bootstraps restaurant, active menu, and today's order", async () => {
     const response = await bootstrap(context(new Request("https://example.test/api/bootstrap")));
     expect(response.status).toBe(200);
@@ -78,10 +96,13 @@ describe("order APIs", () => {
         if (sql.includes("order_contributions")) throw new Error("full snapshot should not be queried");
         return {
           bind() { return this; },
-          first: async () => ({ revision: 3, configuration_revision: 4 }),
+          first: async () => sql.includes("automatic_order_locks")
+            ? ({ execution_token: "another-runner" })
+            : ({ revision: 3, configuration_revision: 4 }),
           all: async () => ({ results: [] }),
         };
       },
+      batch: async () => [],
     } as unknown as D1Database;
     const response = await changes({
       request: new Request(`https://example.test/api/order/changes?date=${today}&since=3&configurationSince=4`),
@@ -109,5 +130,29 @@ describe("order APIs", () => {
       "2026-07-29",
       "2026-07-28",
     ]);
+  });
+
+  it("uses the ordered price snapshot for history totals and detail", async () => {
+    expect((await adjust(context(adjustRequest("history-price-op")))).status).toBe(200);
+    await env.DB.prepare(
+      "UPDATE menu_items SET name = '新酸菜鱼', price_cents = 9900 WHERE id = 'dish-suan-cai-yu'",
+    ).run();
+
+    const listResponse = await history(context(new Request("https://example.test/api/history")));
+    const listBody = await listResponse.json() as any;
+    expect(listBody.dates).toContainEqual(expect.objectContaining({
+      orderDate: today,
+      totalQuantity: 1,
+      totalCents: 6800,
+    }));
+
+    const detailResponse = await historyDetail(context(
+      new Request(`https://example.test/api/history/${today}`),
+      { date: today },
+    ));
+    expect(await detailResponse.json()).toMatchObject({
+      totalCents: 6800,
+      dishes: [{ name: "酸菜鱼", priceCents: 6800, subtotalCents: 6800 }],
+    });
   });
 });

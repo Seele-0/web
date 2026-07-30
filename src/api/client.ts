@@ -15,6 +15,9 @@ export type ChangesResponse = {
 };
 export type HistorySummary = Pick<OrderSnapshot, "orderDate" | "shareCount" | "revision" | "locked" | "totalQuantity" | "totalCents">;
 export type AdminContributionRequest = Pick<Contributor, "deviceId" | "displayName" | "quantity"> & { orderDate: string; menuItemId: string };
+export type AdminMenuItemRequest = { name: string; priceCents: number };
+export type AdminOrderItemRequest = AdminMenuItemRequest & { orderDate: string; quantity: number };
+export type ParsedMenuResponse = { items: Array<{ name: string; priceCents: number; sourceLine: number }>; errors: [] };
 
 export class ApiError extends Error { constructor(message: string, public status: number, public code?: string) { super(message); } }
 
@@ -38,7 +41,13 @@ export const apiClient = {
   adminLogin: (password: string) => requestJson<{ authenticated: true }>("/api/admin/login", jsonInit("POST", { password })),
   adminLogout: () => requestJson<{ authenticated: false }>("/api/admin/logout", { method: "POST" }),
   adminRenameRestaurant: (restaurantName: string) => requestJson<{ restaurantName: string }>("/api/admin/settings/restaurant-name", jsonInit("PUT", { restaurantName })),
-  adminImportMenu: (markdown: string) => requestJson<{ items: Array<{ name: string; priceCents: number; sourceLine: number }>; errors: [] }>("/api/admin/menu/import", jsonInit("POST", { markdown })),
+  adminImportMenu: (text: string) => requestJson<ParsedMenuResponse>("/api/admin/menu/import", jsonInit("POST", { text })),
+  adminUpsertMenuItem: (input: AdminMenuItemRequest) => requestJson<MenuItem>("/api/admin/menu/item", jsonInit("POST", input)),
+  adminDeleteMenuItem: (menuItemId: string) => requestJson<{ deleted: true }>("/api/admin/menu/item", jsonInit("DELETE", { menuItemId })),
+  adminClearMenu: () => requestJson<{ cleared: true }>("/api/admin/menu/clear", jsonInit("POST", {})),
+  adminImportOrder: (orderDate: string, text: string) => requestJson<OrderSnapshot>("/api/admin/order/import", jsonInit("POST", { orderDate, text })),
+  adminUpsertOrderItem: (input: AdminOrderItemRequest) => requestJson<OrderSnapshot>("/api/admin/order/item", jsonInit("POST", input)),
+  adminDeleteOrderItem: (orderDate: string, menuItemId: string) => requestJson<OrderSnapshot>("/api/admin/order/item", jsonInit("DELETE", { orderDate, menuItemId })),
   adminClearOrder: (orderDate: string) => requestJson<OrderSnapshot>("/api/admin/order/clear", jsonInit("POST", { orderDate })),
   adminSetOrderLocked: (orderDate: string, locked: boolean) => requestJson<OrderSnapshot>("/api/admin/order/lock", jsonInit("PUT", { orderDate, locked })),
   adminCorrectContribution: (input: AdminContributionRequest) => requestJson<OrderSnapshot>("/api/admin/order/contribution", jsonInit("PUT", input)),
