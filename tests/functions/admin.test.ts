@@ -74,4 +74,16 @@ describe("administrator APIs", () => {
     expect((await getOrderSnapshot(env.DB, "2026-07-30")).totalQuantity).toBe(0);
     expect((await env.DB.prepare("SELECT COUNT(*) AS count FROM activity_log").first<any>())!.count).toBeGreaterThan(0);
   });
+
+  it("requires a historical order to be unlocked before correcting a contribution", async () => {
+    const { cookie } = await adminCookie();
+    await lockOrder(context(jsonRequest("/api/admin/order/lock", "PUT", { orderDate: "2026-07-29", locked: true }, cookie)));
+
+    const correction = await correctContribution(context(jsonRequest("/api/admin/order/contribution", "PUT", {
+      orderDate: "2026-07-29", menuItemId: "dish-suan-cai-yu", deviceId: "device-a", displayName: "张三", quantity: 2,
+    }, cookie)));
+
+    expect(correction.status).toBe(409);
+    expect(await correction.json()).toMatchObject({ error: { code: "order_locked" } });
+  });
 });

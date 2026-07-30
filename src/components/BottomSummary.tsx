@@ -14,7 +14,7 @@ export function BottomSummary({ totalQuantity, totalCents, shareCount, locked = 
 
   function updateShareCount(value: string) {
     const next = Number(value);
-    if (Number.isInteger(next) && next >= 1 && next <= 999) void onShareCount(next);
+    if (Number.isInteger(next) && next >= 1 && next <= 100) void onShareCount(next);
   }
 
   return (
@@ -31,7 +31,7 @@ export function BottomSummary({ totalQuantity, totalCents, shareCount, locked = 
             type="number"
             inputMode="numeric"
             min="1"
-            max="999"
+            max="100"
             value={shareCount}
             disabled={locked}
             onChange={(event) => updateShareCount(event.target.value)}

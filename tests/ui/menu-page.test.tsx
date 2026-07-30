@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MenuPage } from "../../src/menu/MenuPage";
 
@@ -13,7 +13,8 @@ const order = {
 
 it("renders the warm menu without exposing orderer names and supports interactions", async () => {
   const onAdjust = vi.fn();
-  render(<MenuPage restaurantName="今日点餐" date="2026年7月30日" displayName="张三" deviceId="device-a" status="synced" menu={menu} order={order} onAdjust={onAdjust} onShareCount={vi.fn()} onOverview={vi.fn()} onEditName={vi.fn()} />);
+  const onShareCount = vi.fn();
+  render(<MenuPage restaurantName="今日点餐" date="2026年7月30日" displayName="张三" deviceId="device-a" status="synced" menu={menu} order={order} onAdjust={onAdjust} onShareCount={onShareCount} onOverview={vi.fn()} onEditName={vi.fn()} />);
   expect(screen.getByRole("heading", { name: "今日点餐" })).toBeInTheDocument();
   expect(screen.getByText("2026年7月30日")).toBeInTheDocument();
   expect(screen.getByText("酸菜鱼")).toBeInTheDocument();
@@ -28,4 +29,9 @@ it("renders the warm menu without exposing orderer names and supports interactio
   expect(screen.getByText("共 2 份")).toBeInTheDocument();
   expect(screen.getByText("¥136.00")).toBeInTheDocument();
   expect(screen.getByText("¥68.00 / 人")).toBeInTheDocument();
+
+  const shareCount = screen.getByRole("spinbutton", { name: "均摊" });
+  expect(shareCount).toHaveAttribute("max", "100");
+  fireEvent.change(shareCount, { target: { value: "101" } });
+  expect(onShareCount).not.toHaveBeenCalled();
 });

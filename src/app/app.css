@@ -382,7 +382,7 @@ input:focus-visible {
 
 .summary-sharing input {
   width: 44px;
-  min-height: 32px;
+  min-height: 44px;
   padding: 3px 4px;
   border: 1px solid #5f5c56;
   border-radius: 8px;
@@ -926,6 +926,68 @@ input:focus-visible {
   display: grid;
   gap: 9px;
   margin-top: 8px;
+}
+
+.managed-order-toolbar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 9px;
+  align-items: end;
+}
+
+.managed-order-toolbar label {
+  display: grid;
+  gap: 7px;
+}
+
+.managed-order-state {
+  display: grid;
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.contribution-list {
+  display: grid;
+  gap: 10px;
+}
+
+.contribution-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 76px auto;
+  gap: 9px;
+  align-items: end;
+  padding: 12px;
+  border-radius: 11px;
+  background: #f7f4ee;
+}
+
+.contribution-copy strong,
+.contribution-copy span {
+  display: block;
+}
+
+.contribution-copy span {
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.contribution-row label {
+  display: grid;
+  gap: 5px;
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+
+.contribution-row input {
+  min-width: 0;
+}
+
+@media (max-width: 520px) {
+  .managed-order-toolbar,
+  .contribution-row {
+    grid-template-columns: 1fr;
+  }
 }
 
 .menu-import-panel > label,

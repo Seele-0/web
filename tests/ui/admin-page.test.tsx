@@ -3,13 +3,31 @@ import userEvent from "@testing-library/user-event";
 import { AdminPage } from "../../src/admin/AdminPage";
 
 function createApi() {
+  const historicalOrder = {
+    orderDate: "2026-07-29",
+    shareCount: 2,
+    revision: 4,
+    locked: true,
+    totalQuantity: 1,
+    totalCents: 6800,
+    dishes: [{
+      menuItemId: "dish-suan-cai-yu",
+      name: "酸菜鱼",
+      priceCents: 6800,
+      quantity: 1,
+      subtotalCents: 6800,
+      contributors: [{ deviceId: "device-a", displayName: "张三", quantity: 1 }],
+    }],
+  };
   return {
     adminLogin: vi.fn().mockResolvedValue({ authenticated: true }),
     adminLogout: vi.fn().mockResolvedValue({ authenticated: false }),
     adminRenameRestaurant: vi.fn().mockResolvedValue({ restaurantName: "暖味小馆" }),
     adminImportMenu: vi.fn().mockResolvedValue({ items: [], errors: [] }),
     adminClearOrder: vi.fn().mockResolvedValue({ locked: false }),
-    adminSetOrderLocked: vi.fn().mockResolvedValue({ locked: true }),
+    adminSetOrderLocked: vi.fn().mockImplementation(async (_date: string, locked: boolean) => ({ ...historicalOrder, locked })),
+    historyDetail: vi.fn().mockResolvedValue(historicalOrder),
+    adminCorrectContribution: vi.fn().mockImplementation(async (input: { quantity: number }) => ({ ...historicalOrder, locked: false, totalQuantity: input.quantity })),
   };
 }
 
@@ -88,4 +106,32 @@ it("requires the dated clear phrase and toggles the order lock", async () => {
   await userEvent.click(screen.getByRole("button", { name: "锁定今日订单" }));
   expect(api.adminSetOrderLocked).toHaveBeenCalledWith("2026-07-30", true);
   expect(await screen.findByRole("button", { name: "解锁今日订单" })).toBeInTheDocument();
+});
+
+it("loads a historical order, unlocks it, and corrects an existing contribution", async () => {
+  const api = createApi();
+  render(<AdminPage api={api} orderDate="2026-07-30" restaurantName="今日点餐" locked={false} onBack={vi.fn()} />);
+  await login(api);
+
+  const managedDate = screen.getByLabelText("管理订单日期");
+  await userEvent.clear(managedDate);
+  await userEvent.type(managedDate, "2026-07-29");
+  await userEvent.click(screen.getByRole("button", { name: "加载所选订单" }));
+
+  expect(api.historyDetail).toHaveBeenCalledWith("2026-07-29");
+  expect(await screen.findByText("张三")).toBeInTheDocument();
+  await userEvent.click(screen.getByRole("button", { name: "解锁所选订单" }));
+  expect(api.adminSetOrderLocked).toHaveBeenCalledWith("2026-07-29", false);
+
+  const quantity = screen.getByRole("spinbutton", { name: "张三的酸菜鱼数量" });
+  await userEvent.clear(quantity);
+  await userEvent.type(quantity, "3");
+  await userEvent.click(screen.getByRole("button", { name: "保存张三的酸菜鱼数量" }));
+  expect(api.adminCorrectContribution).toHaveBeenCalledWith({
+    orderDate: "2026-07-29",
+    menuItemId: "dish-suan-cai-yu",
+    deviceId: "device-a",
+    displayName: "张三",
+    quantity: 3,
+  });
 });

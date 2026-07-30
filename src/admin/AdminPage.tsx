@@ -1,5 +1,5 @@
 import { type FormEvent, useEffect, useState } from "react";
-import { apiClient } from "../api/client";
+import { apiClient, type AdminContributionRequest, type OrderSnapshot } from "../api/client";
 import { MenuImportPanel } from "./MenuImportPanel";
 
 export type AdminApi = {
@@ -9,6 +9,8 @@ export type AdminApi = {
   adminImportMenu: (markdown: string) => Promise<unknown>;
   adminClearOrder: (orderDate: string) => Promise<unknown>;
   adminSetOrderLocked: (orderDate: string, locked: boolean) => Promise<{ locked?: boolean }>;
+  historyDetail: (orderDate: string) => Promise<OrderSnapshot>;
+  adminCorrectContribution: (input: AdminContributionRequest) => Promise<OrderSnapshot>;
 };
 
 type Feedback = { kind: "success" | "error"; message: string } | null;
@@ -30,6 +32,10 @@ export function AdminPage({ orderDate, restaurantName, locked, onBack, onChanged
   const [clearFeedback, setClearFeedback] = useState<Feedback>(null);
   const [isLocked, setIsLocked] = useState(locked);
   const [lockFeedback, setLockFeedback] = useState<Feedback>(null);
+  const [managedDate, setManagedDate] = useState(orderDate);
+  const [managedOrder, setManagedOrder] = useState<OrderSnapshot | null>(null);
+  const [managedFeedback, setManagedFeedback] = useState<Feedback>(null);
+  const [quantityDrafts, setQuantityDrafts] = useState<Record<string, string>>({});
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const requiredClearPhrase = `清空 ${orderDate}`;
 
@@ -95,6 +101,68 @@ export function AdminPage({ orderDate, restaurantName, locked, onBack, onChanged
     }
   }
 
+  function contributionKey(menuItemId: string, deviceId: string) {
+    return `${menuItemId}:${deviceId}`;
+  }
+
+  function updateManagedOrder(order: OrderSnapshot) {
+    setManagedOrder(order);
+    setQuantityDrafts(Object.fromEntries(order.dishes.flatMap((dish) => dish.contributors.map((contributor) => [
+      contributionKey(dish.menuItemId, contributor.deviceId),
+      String(contributor.quantity),
+    ]))));
+  }
+
+  async function loadManagedOrder() {
+    setBusyAction("load-order");
+    setManagedFeedback(null);
+    try {
+      updateManagedOrder(await api.historyDetail(managedDate));
+    } catch (caught) {
+      setManagedOrder(null);
+      setManagedFeedback({ kind: "error", message: caught instanceof Error ? caught.message : "订单加载失败" });
+    } finally {
+      setBusyAction(null);
+    }
+  }
+
+  async function toggleManagedLock() {
+    if (!managedOrder) return;
+    const nextLocked = !managedOrder.locked;
+    setBusyAction("managed-lock");
+    setManagedFeedback(null);
+    try {
+      const result = await api.adminSetOrderLocked(managedOrder.orderDate, nextLocked);
+      updateManagedOrder({ ...managedOrder, ...result, locked: result.locked ?? nextLocked });
+      setManagedFeedback({ kind: "success", message: nextLocked ? "所选订单已锁定" : "所选订单已解锁，可以修正贡献" });
+      await onChanged?.();
+    } catch (caught) {
+      setManagedFeedback({ kind: "error", message: caught instanceof Error ? caught.message : "订单状态更新失败" });
+    } finally {
+      setBusyAction(null);
+    }
+  }
+
+  async function correctContribution(input: Omit<AdminContributionRequest, "quantity">) {
+    const key = contributionKey(input.menuItemId, input.deviceId);
+    const quantity = Number(quantityDrafts[key]);
+    if (!Number.isInteger(quantity) || quantity < 0 || quantity > 999) {
+      setManagedFeedback({ kind: "error", message: "贡献数量必须为 0 到 999 的整数" });
+      return;
+    }
+    setBusyAction(`contribution:${key}`);
+    setManagedFeedback(null);
+    try {
+      updateManagedOrder(await api.adminCorrectContribution({ ...input, quantity }));
+      setManagedFeedback({ kind: "success", message: `${input.displayName} 的贡献数量已保存` });
+      await onChanged?.();
+    } catch (caught) {
+      setManagedFeedback({ kind: "error", message: caught instanceof Error ? caught.message : "贡献数量保存失败" });
+    } finally {
+      setBusyAction(null);
+    }
+  }
+
   if (!authenticated) {
     return (
       <div className="secondary-page admin-login-page">
@@ -134,6 +202,58 @@ export function AdminPage({ orderDate, restaurantName, locked, onBack, onChanged
         </form>
 
         <MenuImportPanel onImport={api.adminImportMenu} onImported={onChanged} />
+
+        <section className="admin-card" aria-labelledby="managed-order-title">
+          <div className="admin-card-heading">
+            <div><p>加载任意日期，先解锁再修正用户贡献</p><h2 id="managed-order-title">历史与贡献修正</h2></div>
+            {managedOrder && <span className={`admin-state ${managedOrder.locked ? "locked" : "open"}`}>{managedOrder.locked ? "已锁定" : "可编辑"}</span>}
+          </div>
+          <div className="managed-order-toolbar">
+            <label htmlFor="managed-order-date">管理订单日期
+              <input id="managed-order-date" type="date" value={managedDate} onChange={(event) => { setManagedDate(event.target.value); setManagedOrder(null); setManagedFeedback(null); }} />
+            </label>
+            <button type="button" className="admin-secondary" disabled={!managedDate || busyAction === "load-order"} onClick={() => void loadManagedOrder()}>加载所选订单</button>
+          </div>
+
+          {managedOrder && (
+            <div className="managed-order-state">
+              <button type="button" className="admin-secondary full-width" disabled={busyAction === "managed-lock"} onClick={() => void toggleManagedLock()}>{managedOrder.locked ? "解锁所选订单" : "锁定所选订单"}</button>
+              {managedOrder.dishes.some((dish) => dish.contributors.length > 0) ? (
+                <div className="contribution-list">
+                  {managedOrder.dishes.flatMap((dish) => dish.contributors.map((contributor) => {
+                    const key = contributionKey(dish.menuItemId, contributor.deviceId);
+                    return (
+                      <div className="contribution-row" key={key}>
+                        <div className="contribution-copy"><strong>{contributor.displayName}</strong><span>{dish.name}</span></div>
+                        <label htmlFor={`contribution-${key}`}>数量
+                          <input
+                            id={`contribution-${key}`}
+                            type="number"
+                            min="0"
+                            max="999"
+                            inputMode="numeric"
+                            aria-label={`${contributor.displayName}的${dish.name}数量`}
+                            value={quantityDrafts[key] ?? String(contributor.quantity)}
+                            disabled={managedOrder.locked}
+                            onChange={(event) => setQuantityDrafts((current) => ({ ...current, [key]: event.target.value }))}
+                          />
+                        </label>
+                        <button
+                          type="button"
+                          className="admin-primary"
+                          aria-label={`保存${contributor.displayName}的${dish.name}数量`}
+                          disabled={managedOrder.locked || busyAction === `contribution:${key}`}
+                          onClick={() => void correctContribution({ orderDate: managedOrder.orderDate, menuItemId: dish.menuItemId, deviceId: contributor.deviceId, displayName: contributor.displayName })}
+                        >保存</button>
+                      </div>
+                    );
+                  }))}
+                </div>
+              ) : <p className="secondary-empty">该订单暂无可修正的贡献记录</p>}
+            </div>
+          )}
+          {managedFeedback && <p className={`action-feedback ${managedFeedback.kind}`} role={managedFeedback.kind === "error" ? "alert" : "status"}>{managedFeedback.message}</p>}
+        </section>
 
         <section className="admin-card" aria-labelledby="order-control-title">
           <div className="admin-card-heading"><div><p>管理 {orderDate} 的可编辑状态</p><h2 id="order-control-title">订单锁定</h2></div><span className={`admin-state ${isLocked ? "locked" : "open"}`}>{isLocked ? "已锁定" : "可编辑"}</span></div>

@@ -1,7 +1,6 @@
 import { AppRouter } from "./AppRouter";
 import { NameGate } from "../components/NameGate";
 import { OfflineBanner } from "../components/OfflineBanner";
-import { getShanghaiBusinessDate } from "../domain/date";
 import type { ActiveIdentity } from "../domain/identity";
 import { useIdentity } from "../hooks/useIdentity";
 import { useOrderSync } from "../hooks/useOrderSync";
@@ -12,14 +11,14 @@ function formatBusinessDate(value: string): string {
 }
 
 function OrderingApp({ identity, onEditName }: { identity: ActiveIdentity; onEditName: () => void }) {
-  const { restaurantName, menu, order, status, adjust, setShareCount, refresh } = useOrderSync(identity);
+  const { date, restaurantName, menu, order, status, adjust, setShareCount, refresh } = useOrderSync(identity);
 
   return (
     <>
       <OfflineBanner visible={status === "offline"} />
       <AppRouter
         restaurantName={restaurantName}
-        date={formatBusinessDate(getShanghaiBusinessDate())}
+        date={formatBusinessDate(date)}
         displayName={identity.displayName}
         deviceId={identity.deviceId}
         status={status}

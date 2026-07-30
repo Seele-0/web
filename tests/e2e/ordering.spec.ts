@@ -54,6 +54,18 @@ test("supports collaborative ordering, offline replay, history, and admin menu p
   await zhangPage.getByLabel("管理员密码").fill("e2e-admin-password");
   await zhangPage.getByRole("button", { name: "登录管理后台" }).click();
   await expect(zhangPage.getByRole("heading", { name: "管理设置" })).toBeVisible();
+
+  await zhangPage.getByRole("button", { name: "加载所选订单" }).click();
+  await expect(zhangPage.getByText("张三", { exact: true })).toBeVisible();
+  await zhangPage.getByRole("button", { name: "锁定所选订单" }).click();
+  await expect(zhangPage.getByRole("button", { name: "解锁所选订单" })).toBeVisible();
+  await expect(zhangPage.getByRole("spinbutton", { name: "张三的酸菜鱼数量" })).toBeDisabled();
+  await zhangPage.getByRole("button", { name: "解锁所选订单" }).click();
+  const correctedQuantity = zhangPage.getByRole("spinbutton", { name: "张三的酸菜鱼数量" });
+  await correctedQuantity.fill("1");
+  await zhangPage.getByRole("button", { name: "保存张三的酸菜鱼数量" }).click();
+  await expect(zhangPage.getByText("张三 的贡献数量已保存")).toBeVisible();
+
   await zhangPage.getByLabel("Markdown 菜单").fill("- 酸菜鱼 | 68\n- 米饭 | 2");
   await expect(zhangPage.getByText("预览 2 道菜")).toBeVisible();
 

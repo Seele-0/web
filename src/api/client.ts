@@ -8,6 +8,7 @@ export type AdjustRequest = { operationId: string; orderDate: string; menuItemId
 export type ShareCountRequest = { operationId: string; orderDate: string; deviceId: string; displayName: string; shareCount: number };
 export type ChangesResponse = { changed: false; revision: number } | { changed: true; revision: number; order: OrderSnapshot };
 export type HistorySummary = Pick<OrderSnapshot, "orderDate" | "shareCount" | "revision" | "locked" | "totalQuantity" | "totalCents">;
+export type AdminContributionRequest = Pick<Contributor, "deviceId" | "displayName" | "quantity"> & { orderDate: string; menuItemId: string };
 
 export class ApiError extends Error { constructor(message: string, public status: number, public code?: string) { super(message); } }
 
@@ -32,5 +33,6 @@ export const apiClient = {
   adminImportMenu: (markdown: string) => requestJson<{ items: Array<{ name: string; priceCents: number; sourceLine: number }>; errors: [] }>("/api/admin/menu/import", jsonInit("POST", { markdown })),
   adminClearOrder: (orderDate: string) => requestJson<OrderSnapshot>("/api/admin/order/clear", jsonInit("POST", { orderDate })),
   adminSetOrderLocked: (orderDate: string, locked: boolean) => requestJson<OrderSnapshot>("/api/admin/order/lock", jsonInit("PUT", { orderDate, locked })),
+  adminCorrectContribution: (input: AdminContributionRequest) => requestJson<OrderSnapshot>("/api/admin/order/contribution", jsonInit("PUT", input)),
 };
 export type OrderingApi = Pick<typeof apiClient, "bootstrap" | "adjust" | "setShareCount" | "changes" | "history" | "historyDetail">;

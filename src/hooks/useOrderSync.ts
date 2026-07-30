@@ -33,12 +33,13 @@ function optimisticAdjust(order: OrderSnapshot, menu: MenuItem[], identity: Iden
 
 export function useOrderSync(identity: Identity & { api?: OrderingApi }) {
   const api = identity.api ?? apiClient;
-  const date = getShanghaiBusinessDate();
+  const [date, setDate] = useState(() => getShanghaiBusinessDate());
   const [restaurantName, setRestaurantName] = useState("今日点餐");
   const [menu, setMenu] = useState<MenuItem[]>([]);
   const [order, setOrder] = useState<OrderSnapshot | null>(null);
   const [status, setStatus] = useState<SyncState>(navigator.onLine ? "syncing" : "offline");
   const orderRef = useRef(order); orderRef.current = order;
+  const dateRef = useRef(date); dateRef.current = date;
 
   const applyBootstrap = useCallback((value: BootstrapResponse) => { setRestaurantName(value.restaurantName); setMenu(value.menu); setOrder(value.order); orderRef.current = value.order; }, []);
   const refresh = useCallback(async () => { const value = await api.bootstrap(date); applyBootstrap(value); setStatus("synced"); }, [api, date, applyBootstrap]);
@@ -68,14 +69,24 @@ export function useOrderSync(identity: Identity & { api?: OrderingApi }) {
   const replay = useCallback(async () => {
     if (!navigator.onLine) return;
     setStatus("syncing");
-    for (const operation of loadQueue()) await sendOperation(operation);
+    for (const operation of loadQueue()) {
+      if (operation.body.orderDate !== date) {
+        removeOperation(operation.operationId);
+        continue;
+      }
+      await sendOperation(operation);
+    }
     await refresh();
-  }, [refresh, sendOperation]);
+  }, [date, refresh, sendOperation]);
 
   useEffect(() => {
     void refresh().then(replay).catch(() => setStatus(navigator.onLine ? "failed" : "offline"));
     let timer: number;
-    const schedule = () => { window.clearTimeout(timer); timer = window.setTimeout(async () => { await poll(); schedule(); }, document.hidden ? 10_000 : 2_000); };
+    const schedule = () => { window.clearTimeout(timer); timer = window.setTimeout(async () => {
+      const currentDate = getShanghaiBusinessDate();
+      if (currentDate !== dateRef.current) { setDate(currentDate); return; }
+      await poll(); schedule();
+    }, document.hidden ? 10_000 : 2_000); };
     schedule();
     const online = () => void replay();
     const offline = () => setStatus("offline");
@@ -102,5 +113,5 @@ export function useOrderSync(identity: Identity & { api?: OrderingApi }) {
     setStatus("syncing"); await sendOperation(operation);
   }, [date, identity.deviceId, identity.displayName, sendOperation]);
 
-  return { restaurantName, menu, order, status, adjust, setShareCount, refresh };
+  return { date, restaurantName, menu, order, status, adjust, setShareCount, refresh };
 }
