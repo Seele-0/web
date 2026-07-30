@@ -118,6 +118,16 @@ export async function adjustContribution(db: D1Database, input: AdjustInput): Pr
       ),
     db
       .prepare(
+        `INSERT INTO order_items
+          (order_date, menu_item_id, name, price_cents, sort_order, created_at, updated_at)
+         SELECT ?, id, name, price_cents, sort_order, ?, ?
+         FROM menu_items
+         WHERE id = ? AND active = 1
+         ON CONFLICT(order_date, menu_item_id) DO NOTHING`,
+      )
+      .bind(input.orderDate, input.now, input.now, input.menuItemId),
+    db
+      .prepare(
         `INSERT INTO order_contributions
           (order_date, menu_item_id, device_id, display_name, quantity, updated_at)
          VALUES (?, ?, ?, ?, CASE WHEN ? = 1 THEN 1 ELSE 0 END, ?)
@@ -199,12 +209,13 @@ export async function getOrderSnapshot(db: D1Database, orderDate: string): Promi
   const order = await getOrderRow(db, orderDate);
   const rows = await db
     .prepare(
-      `SELECT c.menu_item_id, m.name, m.price_cents, m.sort_order,
+      `SELECT c.menu_item_id, i.name, i.price_cents, i.sort_order,
               c.device_id, c.display_name, c.quantity
        FROM order_contributions c
-       JOIN menu_items m ON m.id = c.menu_item_id
+       JOIN order_items i
+         ON i.order_date = c.order_date AND i.menu_item_id = c.menu_item_id
        WHERE c.order_date = ? AND c.quantity > 0
-       ORDER BY m.sort_order, c.device_id`,
+       ORDER BY i.sort_order, c.device_id`,
     )
     .bind(orderDate)
     .all<ContributionRow>();

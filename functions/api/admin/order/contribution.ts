@@ -18,6 +18,14 @@ export const onRequestPut: PagesFunction<Env> = async ({ request, env }) => {
     await env.DB.batch([
       env.DB.prepare("INSERT INTO daily_orders (order_date, share_count, revision, locked, updated_at) VALUES (?, 1, 0, 0, ?) ON CONFLICT(order_date) DO NOTHING").bind(orderDate, now),
       env.DB.prepare(
+        `INSERT INTO order_items
+          (order_date, menu_item_id, name, price_cents, sort_order, created_at, updated_at)
+         SELECT ?, id, name, price_cents, sort_order, ?, ?
+         FROM menu_items
+         WHERE id = ?
+         ON CONFLICT(order_date, menu_item_id) DO NOTHING`,
+      ).bind(orderDate, now, now, menuItemId),
+      env.DB.prepare(
         `INSERT INTO order_contributions (order_date, menu_item_id, device_id, display_name, quantity, updated_at)
          VALUES (?, ?, ?, ?, ?, ?)
          ON CONFLICT(order_date, menu_item_id, device_id) DO UPDATE SET display_name = excluded.display_name, quantity = excluded.quantity, updated_at = excluded.updated_at`,

@@ -3,6 +3,7 @@ import { onRequestGet as bootstrap } from "../../functions/api/bootstrap";
 import { onRequestGet as changes } from "../../functions/api/order/changes";
 import { onRequestPost as adjust } from "../../functions/api/order/adjust";
 import { onRequestGet as history } from "../../functions/api/history/index";
+import { onRequestGet as historyDetail } from "../../functions/api/history/[date]";
 import { getShanghaiBusinessDate } from "../../functions/_lib/date";
 
 const today = getShanghaiBusinessDate();
@@ -109,5 +110,29 @@ describe("order APIs", () => {
       "2026-07-29",
       "2026-07-28",
     ]);
+  });
+
+  it("uses the ordered price snapshot for history totals and detail", async () => {
+    expect((await adjust(context(adjustRequest("history-price-op")))).status).toBe(200);
+    await env.DB.prepare(
+      "UPDATE menu_items SET name = '新酸菜鱼', price_cents = 9900 WHERE id = 'dish-suan-cai-yu'",
+    ).run();
+
+    const listResponse = await history(context(new Request("https://example.test/api/history")));
+    const listBody = await listResponse.json() as any;
+    expect(listBody.dates).toContainEqual(expect.objectContaining({
+      orderDate: today,
+      totalQuantity: 1,
+      totalCents: 6800,
+    }));
+
+    const detailResponse = await historyDetail(context(
+      new Request(`https://example.test/api/history/${today}`),
+      { date: today },
+    ));
+    expect(await detailResponse.json()).toMatchObject({
+      totalCents: 6800,
+      dishes: [{ name: "酸菜鱼", priceCents: 6800, subtotalCents: 6800 }],
+    });
   });
 });
