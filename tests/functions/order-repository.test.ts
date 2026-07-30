@@ -29,6 +29,26 @@ async function menuRevision(): Promise<number> {
 }
 
 
+function lockImmediatelyBeforeBatch(orderDate: string): D1Database {
+  return {
+    prepare(sql: string) {
+      return env.DB.prepare(sql);
+    },
+    async batch(statements: D1PreparedStatement[]) {
+      await env.DB.prepare("UPDATE daily_orders SET locked = 1 WHERE order_date = ?").bind(orderDate).run();
+      return env.DB.batch(statements);
+    },
+  } as unknown as D1Database;
+}
+
+async function activityCount(orderDate: string, action: string): Promise<number> {
+  const result = await env.DB.prepare(
+    "SELECT COUNT(*) AS count FROM activity_log WHERE order_date = ? AND action = ?",
+  ).bind(orderDate, action).first<{ count: number }>();
+  return result?.count ?? 0;
+}
+
+
 describe("order repository", () => {
   it("applies a contribution atomically and increments revision", async () => {
     const snapshot = await adjustContribution(env.DB, { ...baseInput, operationId: "device-a-1" });
@@ -474,6 +494,112 @@ describe("order repository", () => {
     expect(await env.DB.prepare(
       "SELECT COUNT(*) AS count FROM order_items WHERE order_date = ? AND menu_item_id = ?",
     ).bind(baseInput.orderDate, baseInput.menuItemId).first()).toMatchObject({ count: 1 });
+  });
+
+
+  it("rejects administrator batches when the order becomes locked after preflight without side effects", async () => {
+    const replaceDate = "2026-07-28";
+    await setOrderLocked(env.DB, { orderDate: replaceDate, locked: false, now: baseInput.now });
+    const replaceMenuRevision = await menuRevision();
+    const replaceDb = lockImmediatelyBeforeBatch(replaceDate);
+    await expect(replaceOrderFromText(replaceDb, {
+      orderDate: replaceDate,
+      text: "竞态导入菜 -- 18 -- 2",
+      now: "2026-07-30T10:01:00.000Z",
+    })).rejects.toMatchObject({ status: 423, code: "order_locked" } satisfies Partial<HttpError>);
+    expect(await getOrderSnapshot(env.DB, replaceDate)).toMatchObject({ locked: true, revision: 1, dishes: [] });
+    expect(await env.DB.prepare("SELECT COUNT(*) AS count FROM menu_items WHERE name = '竞态导入菜'").first())
+      .toMatchObject({ count: 0 });
+    expect(await menuRevision()).toBe(replaceMenuRevision);
+    expect(await activityCount(replaceDate, "replace_order")).toBe(0);
+
+    const upsertDate = "2026-07-29";
+    await setOrderLocked(env.DB, { orderDate: upsertDate, locked: false, now: baseInput.now });
+    const upsertMenuRevision = await menuRevision();
+    await expect(upsertAdminOrderItem(lockImmediatelyBeforeBatch(upsertDate), {
+      orderDate: upsertDate,
+      name: "竞态新增菜",
+      priceCents: 1800,
+      quantity: 2,
+      now: "2026-07-30T10:01:00.000Z",
+    })).rejects.toMatchObject({ status: 423, code: "order_locked" } satisfies Partial<HttpError>);
+    expect(await getOrderSnapshot(env.DB, upsertDate)).toMatchObject({ locked: true, revision: 1, dishes: [] });
+    expect(await env.DB.prepare("SELECT COUNT(*) AS count FROM menu_items WHERE name = '竞态新增菜'").first())
+      .toMatchObject({ count: 0 });
+    expect(await menuRevision()).toBe(upsertMenuRevision);
+    expect(await activityCount(upsertDate, "upsert_admin_order_item")).toBe(0);
+
+    const clearDate = "2026-07-27";
+    await upsertAdminOrderItem(env.DB, {
+      orderDate: clearDate,
+      name: "待清空菜",
+      priceCents: 1800,
+      quantity: 2,
+      now: baseInput.now,
+    });
+    await env.DB.prepare("UPDATE daily_orders SET locked = 0 WHERE order_date = ?").bind(clearDate).run();
+    const beforeClear = await getOrderSnapshot(env.DB, clearDate);
+    const clearMenuRevision = await menuRevision();
+    await expect(clearOrder(lockImmediatelyBeforeBatch(clearDate), {
+      orderDate: clearDate,
+      now: "2026-07-30T10:01:00.000Z",
+    })).rejects.toMatchObject({ status: 423, code: "order_locked" } satisfies Partial<HttpError>);
+    expect(await getOrderSnapshot(env.DB, clearDate)).toEqual({ ...beforeClear, locked: true });
+    expect(await menuRevision()).toBe(clearMenuRevision);
+    expect(await activityCount(clearDate, "clear_order")).toBe(0);
+  });
+
+  it("deletes a concurrently targeted order snapshot only once", async () => {
+    const created = await upsertAdminOrderItem(env.DB, {
+      orderDate: baseInput.orderDate,
+      name: "并发删除菜",
+      priceCents: 1800,
+      quantity: 2,
+      now: baseInput.now,
+    });
+    const menuItemId = created.dishes[0].menuItemId;
+    const before = await getOrderSnapshot(env.DB, baseInput.orderDate);
+
+    await Promise.all([
+      deleteOrderItem(env.DB, { orderDate: baseInput.orderDate, menuItemId, now: "2026-07-30T10:01:00.000Z" }),
+      deleteOrderItem(env.DB, { orderDate: baseInput.orderDate, menuItemId, now: "2026-07-30T10:01:00.000Z" }),
+    ]);
+
+    expect(await getOrderSnapshot(env.DB, baseInput.orderDate)).toMatchObject({
+      revision: before.revision + 1,
+      dishes: [],
+    });
+    expect(await activityCount(baseInput.orderDate, "delete_order_item")).toBe(1);
+  });
+
+  it("handles concurrent same-name imports and upserts with one live menu item and date-specific snapshots", async () => {
+    await Promise.all([
+      replaceOrderFromText(env.DB, {
+        orderDate: "2026-07-29",
+        text: "并发同名菜 -- 18 -- 2",
+        now: baseInput.now,
+      }),
+      upsertAdminOrderItem(env.DB, {
+        orderDate: "2026-07-28",
+        name: "并发同名菜",
+        priceCents: 1900,
+        quantity: 3,
+        now: "2026-07-30T10:01:00.000Z",
+      }),
+    ]);
+
+    expect(await env.DB.prepare("SELECT COUNT(*) AS count FROM menu_items WHERE name = '并发同名菜'").first())
+      .toMatchObject({ count: 1 });
+    expect(await env.DB.prepare("SELECT active FROM menu_items WHERE name = '并发同名菜'").first())
+      .toMatchObject({ active: 1 });
+    expect(await getOrderSnapshot(env.DB, "2026-07-29")).toMatchObject({
+      totalQuantity: 2,
+      dishes: [expect.objectContaining({ name: "并发同名菜", priceCents: 1800 })],
+    });
+    expect(await getOrderSnapshot(env.DB, "2026-07-28")).toMatchObject({
+      totalQuantity: 3,
+      dishes: [expect.objectContaining({ name: "并发同名菜", priceCents: 1900 })],
+    });
   });
 
 });

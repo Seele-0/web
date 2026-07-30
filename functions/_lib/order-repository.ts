@@ -82,23 +82,6 @@ type ContributionRow = {
   quantity: number;
   sort_order: number;
 };
-type MenuItemRow = {
-  id: string;
-  name: string;
-  price_cents: number;
-  sort_order: number;
-  active: number;
-};
-
-type ResolvedAdminMenuItem = {
-  id: string;
-  name: string;
-  priceCents: number;
-  sortOrder: number;
-  needsMenuWrite: boolean;
-  create: boolean;
-};
-
 const MIN_PRICE_CENTS = 1;
 const MAX_PRICE_CENTS = 10_000_000;
 
@@ -129,13 +112,69 @@ function ensureOrderStatement(db: D1Database, orderDate: string, now: string): D
     .bind(orderDate, now);
 }
 
-function menuRevisionStatement(db: D1Database, now: string): D1PreparedStatement {
+const ORDER_UNLOCKED_GUARD = "EXISTS (SELECT 1 FROM daily_orders WHERE order_date = ? AND locked = 0)";
+
+function orderLockStatusStatement(db: D1Database, orderDate: string): D1PreparedStatement {
+  return db.prepare("SELECT locked FROM daily_orders WHERE order_date = ?").bind(orderDate);
+}
+
+function assertBatchRemainedUnlocked(results: Array<{ results?: unknown[] }>): void {
+  const row = results.at(-1)?.results?.[0] as { locked?: number } | undefined;
+  if (row?.locked) throw new HttpError(423, "order_locked", "订单已锁定");
+}
+
+function conditionalMenuRevisionStatement(
+  db: D1Database,
+  orderDate: string,
+  now: string,
+): D1PreparedStatement {
   return db.prepare(
-    `INSERT INTO settings (key, value, updated_at) VALUES ('menu_revision', '1', ?)
+    `INSERT INTO settings (key, value, updated_at)
+     SELECT 'menu_revision', '1', ?
+     WHERE changes() > 0 AND ${ORDER_UNLOCKED_GUARD}
      ON CONFLICT(key) DO UPDATE SET
        value = CAST(CAST(settings.value AS INTEGER) + 1 AS TEXT),
        updated_at = excluded.updated_at`,
-  ).bind(now);
+  ).bind(now, orderDate);
+}
+
+function serializedAdminMenuItems(items: Array<{ name: string; priceCents: number }>): string {
+  return JSON.stringify(items.map((item, index) => ({
+    id: `dish-${crypto.randomUUID()}`,
+    name: item.name,
+    priceCents: item.priceCents,
+    sortOffset: index + 1,
+  })));
+}
+
+function insertOrReactivateMenuItemsStatement(
+  db: D1Database,
+  orderDate: string,
+  serializedItems: string,
+  now: string,
+): D1PreparedStatement {
+  return db.prepare(
+    `WITH input AS (
+       SELECT json_extract(value, '$.id') AS id,
+              json_extract(value, '$.name') AS name,
+              CAST(json_extract(value, '$.priceCents') AS INTEGER) AS price_cents,
+              CAST(json_extract(value, '$.sortOffset') AS INTEGER) AS sort_offset
+       FROM json_each(?)
+     ), sort_base AS (
+       SELECT COALESCE(MAX(sort_order), 0) AS maximum_sort_order FROM menu_items
+     )
+     INSERT INTO menu_items (id, name, price_cents, sort_order, active, created_at, updated_at)
+     SELECT input.id, input.name, input.price_cents,
+            sort_base.maximum_sort_order + input.sort_offset,
+            1, ?, ?
+     FROM input CROSS JOIN sort_base
+     WHERE ${ORDER_UNLOCKED_GUARD}
+     ON CONFLICT(name) DO UPDATE SET
+       price_cents = excluded.price_cents,
+       active = 1,
+       updated_at = excluded.updated_at
+     WHERE menu_items.active = 0`,
+  ).bind(serializedItems, now, now, orderDate);
 }
 
 function validateAdminOrderItem(input: AdminOrderItemInput): { name: string; priceCents: number; quantity: number } {
@@ -150,65 +189,6 @@ function validateAdminOrderItem(input: AdminOrderItemInput): { name: string; pri
     throw new HttpError(400, "invalid_order_item_quantity", "菜品数量必须为 1 到 999 的整数");
   }
   return { name, priceCents: input.priceCents, quantity: input.quantity };
-}
-
-async function resolveAdminMenuItems(
-  db: D1Database,
-  items: Array<{ name: string; priceCents: number }>,
-): Promise<ResolvedAdminMenuItem[]> {
-  const existing = await db.prepare(
-    "SELECT id, name, price_cents, sort_order, active FROM menu_items",
-  ).all<MenuItemRow>();
-  const byName = new Map(existing.results.map((item) => [item.name, item]));
-  let nextSortOrder = existing.results.reduce((maximum, item) => Math.max(maximum, item.sort_order), 0);
-
-  return items.map((item) => {
-    const current = byName.get(item.name);
-    if (current?.active) {
-      return {
-        id: current.id,
-        name: item.name,
-        priceCents: item.priceCents,
-        sortOrder: current.sort_order,
-        needsMenuWrite: false,
-        create: false,
-      };
-    }
-    if (current) {
-      return {
-        id: current.id,
-        name: item.name,
-        priceCents: item.priceCents,
-        sortOrder: current.sort_order,
-        needsMenuWrite: true,
-        create: false,
-      };
-    }
-    nextSortOrder += 1;
-    return {
-      id: `dish-${crypto.randomUUID()}`,
-      name: item.name,
-      priceCents: item.priceCents,
-      sortOrder: nextSortOrder,
-      needsMenuWrite: true,
-      create: true,
-    };
-  });
-}
-
-function adminMenuWriteStatements(
-  db: D1Database,
-  items: ResolvedAdminMenuItem[],
-  now: string,
-): D1PreparedStatement[] {
-  return items.filter((item) => item.needsMenuWrite).map((item) => item.create
-    ? db.prepare(
-      `INSERT INTO menu_items (id, name, price_cents, sort_order, active, created_at, updated_at)
-       VALUES (?, ?, ?, ?, 1, ?, ?)`,
-    ).bind(item.id, item.name, item.priceCents, item.sortOrder, now, now)
-    : db.prepare(
-      "UPDATE menu_items SET price_cents = ?, active = 1, updated_at = ? WHERE id = ? AND active = 0",
-    ).bind(item.priceCents, now, item.id));
 }
 
 export async function adjustContribution(db: D1Database, input: AdjustInput): Promise<OrderSnapshot> {
@@ -339,101 +319,149 @@ export async function replaceOrderFromText(db: D1Database, input: ReplaceOrderIn
     throw new HttpError(400, "invalid_order_text", "菜品名称长度必须为 1 到 80 个字符");
   }
 
-  const menuItems = await resolveAdminMenuItems(db, parsed.items);
-  const menuChanged = menuItems.some((item) => item.needsMenuWrite);
-  const statements: D1PreparedStatement[] = [
+  const serializedItems = serializedAdminMenuItems(parsed.items);
+  const results = await db.batch([
     ensureOrderStatement(db, input.orderDate, input.now),
-    db.prepare("DELETE FROM order_contributions WHERE order_date = ?").bind(input.orderDate),
-    db.prepare("DELETE FROM order_items WHERE order_date = ?").bind(input.orderDate),
-    ...adminMenuWriteStatements(db, menuItems, input.now),
-    ...menuItems.map((item, index) => db.prepare(
+    db.prepare(`DELETE FROM order_contributions WHERE order_date = ? AND ${ORDER_UNLOCKED_GUARD}`)
+      .bind(input.orderDate, input.orderDate),
+    db.prepare(`DELETE FROM order_items WHERE order_date = ? AND ${ORDER_UNLOCKED_GUARD}`)
+      .bind(input.orderDate, input.orderDate),
+    insertOrReactivateMenuItemsStatement(db, input.orderDate, serializedItems, input.now),
+    conditionalMenuRevisionStatement(db, input.orderDate, input.now),
+    db.prepare(
       `INSERT INTO order_items
         (order_date, menu_item_id, name, price_cents, sort_order, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
-    ).bind(input.orderDate, item.id, item.name, item.priceCents, index + 1, input.now, input.now)),
-    ...menuItems.map((item, index) => db.prepare(
+       SELECT ?, m.id, json_extract(value, '$.name'),
+              CAST(json_extract(value, '$.priceCents') AS INTEGER),
+              CAST(json_extract(value, '$.sortOffset') AS INTEGER), ?, ?
+       FROM json_each(?)
+       JOIN menu_items m ON m.name = json_extract(value, '$.name')
+       WHERE ${ORDER_UNLOCKED_GUARD}`,
+    ).bind(input.orderDate, input.now, input.now, serializedItems, input.orderDate),
+    db.prepare(
       `INSERT INTO order_contributions
         (order_date, menu_item_id, device_id, display_name, quantity, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?)`,
-    ).bind(input.orderDate, item.id, ADMIN_IMPORT_DEVICE_ID, ADMIN_IMPORT_DISPLAY_NAME,
-      parsed.items[index].quantity, input.now)),
-    db.prepare("UPDATE daily_orders SET revision = revision + 1, updated_at = ? WHERE order_date = ?")
-      .bind(input.now, input.orderDate),
-  ];
-  if (menuChanged) statements.push(menuRevisionStatement(db, input.now));
-  statements.push(
+       SELECT ?, m.id, ?, ?, CAST(json_extract(value, '$.quantity') AS INTEGER), ?
+       FROM json_each(?)
+       JOIN menu_items m ON m.name = json_extract(value, '$.name')
+       WHERE ${ORDER_UNLOCKED_GUARD}`,
+    ).bind(
+      input.orderDate,
+      ADMIN_IMPORT_DEVICE_ID,
+      ADMIN_IMPORT_DISPLAY_NAME,
+      input.now,
+      JSON.stringify(parsed.items),
+      input.orderDate,
+    ),
     db.prepare(
-      "INSERT INTO activity_log (order_date, device_id, display_name, action, details_json, created_at) VALUES (?, ?, ?, 'replace_order', ?, ?)",
+      `UPDATE daily_orders SET revision = revision + 1, updated_at = ?
+       WHERE order_date = ? AND ${ORDER_UNLOCKED_GUARD}`,
+    ).bind(input.now, input.orderDate, input.orderDate),
+    db.prepare(
+      `INSERT INTO activity_log (order_date, device_id, display_name, action, details_json, created_at)
+       SELECT ?, ?, ?, 'replace_order', ?, ?
+       WHERE ${ORDER_UNLOCKED_GUARD}`,
     ).bind(
       input.orderDate,
       ADMIN_IMPORT_DEVICE_ID,
       ADMIN_IMPORT_DISPLAY_NAME,
       JSON.stringify({ itemCount: parsed.items.length }),
       input.now,
+      input.orderDate,
     ),
-  );
-  await db.batch(statements);
+    orderLockStatusStatement(db, input.orderDate),
+  ]);
+  assertBatchRemainedUnlocked(results);
   return getOrderSnapshot(db, input.orderDate);
 }
 
 export async function upsertAdminOrderItem(db: D1Database, input: AdminOrderItemInput): Promise<OrderSnapshot> {
   const { name, priceCents, quantity } = validateAdminOrderItem(input);
   assertUnlocked(await getOrderRow(db, input.orderDate));
-  const [menuItem] = await resolveAdminMenuItems(db, [{ name, priceCents }]);
-  const statements: D1PreparedStatement[] = [
+  const serializedItems = serializedAdminMenuItems([{ name, priceCents }]);
+  const results = await db.batch([
     ensureOrderStatement(db, input.orderDate, input.now),
-    ...adminMenuWriteStatements(db, [menuItem], input.now),
+    insertOrReactivateMenuItemsStatement(db, input.orderDate, serializedItems, input.now),
+    conditionalMenuRevisionStatement(db, input.orderDate, input.now),
     db.prepare(
       `INSERT INTO order_items
         (order_date, menu_item_id, name, price_cents, sort_order, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?)
+       SELECT ?, m.id, json_extract(value, '$.name'),
+              CAST(json_extract(value, '$.priceCents') AS INTEGER), m.sort_order, ?, ?
+       FROM json_each(?)
+       JOIN menu_items m ON m.name = json_extract(value, '$.name')
+       WHERE ${ORDER_UNLOCKED_GUARD}
        ON CONFLICT(order_date, menu_item_id) DO UPDATE SET
          name = excluded.name,
          price_cents = excluded.price_cents,
          sort_order = excluded.sort_order,
          updated_at = excluded.updated_at`,
-    ).bind(input.orderDate, menuItem.id, name, priceCents, menuItem.sortOrder, input.now, input.now),
+    ).bind(input.orderDate, input.now, input.now, serializedItems, input.orderDate),
     db.prepare(
       `INSERT INTO order_contributions
         (order_date, menu_item_id, device_id, display_name, quantity, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?)
+       SELECT ?, m.id, ?, ?, ?, ?
+       FROM json_each(?)
+       JOIN menu_items m ON m.name = json_extract(value, '$.name')
+       WHERE ${ORDER_UNLOCKED_GUARD}
        ON CONFLICT(order_date, menu_item_id, device_id) DO UPDATE SET
          display_name = excluded.display_name,
          quantity = excluded.quantity,
          updated_at = excluded.updated_at`,
-    ).bind(input.orderDate, menuItem.id, ADMIN_IMPORT_DEVICE_ID, ADMIN_IMPORT_DISPLAY_NAME, quantity, input.now),
-    db.prepare("UPDATE daily_orders SET revision = revision + 1, updated_at = ? WHERE order_date = ?")
-      .bind(input.now, input.orderDate),
-  ];
-  if (menuItem.needsMenuWrite) statements.push(menuRevisionStatement(db, input.now));
-  statements.push(
+    ).bind(
+      input.orderDate,
+      ADMIN_IMPORT_DEVICE_ID,
+      ADMIN_IMPORT_DISPLAY_NAME,
+      quantity,
+      input.now,
+      serializedItems,
+      input.orderDate,
+    ),
     db.prepare(
-      "INSERT INTO activity_log (order_date, device_id, display_name, action, details_json, created_at) VALUES (?, ?, ?, 'upsert_admin_order_item', ?, ?)",
-    ).bind(input.orderDate, ADMIN_IMPORT_DEVICE_ID, ADMIN_IMPORT_DISPLAY_NAME,
-      JSON.stringify({ menuItemId: menuItem.id, name, priceCents, quantity }), input.now),
-  );
-  await db.batch(statements);
+      `UPDATE daily_orders SET revision = revision + 1, updated_at = ?
+       WHERE order_date = ? AND ${ORDER_UNLOCKED_GUARD}`,
+    ).bind(input.now, input.orderDate, input.orderDate),
+    db.prepare(
+      `INSERT INTO activity_log (order_date, device_id, display_name, action, details_json, created_at)
+       SELECT ?, ?, ?, 'upsert_admin_order_item', ?, ?
+       WHERE ${ORDER_UNLOCKED_GUARD}`,
+    ).bind(
+      input.orderDate,
+      ADMIN_IMPORT_DEVICE_ID,
+      ADMIN_IMPORT_DISPLAY_NAME,
+      JSON.stringify({ name, priceCents, quantity }),
+      input.now,
+      input.orderDate,
+    ),
+    orderLockStatusStatement(db, input.orderDate),
+  ]);
+  assertBatchRemainedUnlocked(results);
   return getOrderSnapshot(db, input.orderDate);
 }
 
 export async function deleteOrderItem(db: D1Database, input: DeleteOrderItemInput): Promise<OrderSnapshot> {
   assertUnlocked(await getOrderRow(db, input.orderDate));
-  const existing = await db.prepare(
-    "SELECT menu_item_id FROM order_items WHERE order_date = ? AND menu_item_id = ?",
-  ).bind(input.orderDate, input.menuItemId).first();
-  const shouldDelete = Boolean(existing);
-  await db.batch([
-    ensureOrderStatement(db, input.orderDate, input.now),
-    db.prepare("DELETE FROM order_contributions WHERE order_date = ? AND menu_item_id = ? AND ?")
-      .bind(input.orderDate, input.menuItemId, shouldDelete ? 1 : 0),
-    db.prepare("DELETE FROM order_items WHERE order_date = ? AND menu_item_id = ? AND ?")
-      .bind(input.orderDate, input.menuItemId, shouldDelete ? 1 : 0),
-    db.prepare("UPDATE daily_orders SET revision = revision + 1, updated_at = ? WHERE order_date = ? AND ?")
-      .bind(input.now, input.orderDate, shouldDelete ? 1 : 0),
+  const results = await db.batch([
     db.prepare(
-      "INSERT INTO activity_log (order_date, action, details_json, created_at) SELECT ?, 'delete_order_item', json_object('menuItemId', ?), ? WHERE ?",
-    ).bind(input.orderDate, input.menuItemId, input.now, shouldDelete ? 1 : 0),
+      `DELETE FROM order_contributions
+       WHERE order_date = ? AND menu_item_id = ? AND ${ORDER_UNLOCKED_GUARD}`,
+    ).bind(input.orderDate, input.menuItemId, input.orderDate),
+    db.prepare(
+      `DELETE FROM order_items
+       WHERE order_date = ? AND menu_item_id = ? AND ${ORDER_UNLOCKED_GUARD}`,
+    ).bind(input.orderDate, input.menuItemId, input.orderDate),
+    db.prepare(
+      `UPDATE daily_orders SET revision = revision + 1, updated_at = ?
+       WHERE order_date = ? AND changes() > 0 AND ${ORDER_UNLOCKED_GUARD}`,
+    ).bind(input.now, input.orderDate, input.orderDate),
+    db.prepare(
+      `INSERT INTO activity_log (order_date, action, details_json, created_at)
+       SELECT ?, 'delete_order_item', json_object('menuItemId', ?), ?
+       WHERE changes() > 0 AND ${ORDER_UNLOCKED_GUARD}`,
+    ).bind(input.orderDate, input.menuItemId, input.now, input.orderDate),
+    orderLockStatusStatement(db, input.orderDate),
   ]);
+  assertBatchRemainedUnlocked(results);
   return getOrderSnapshot(db, input.orderDate);
 }
 
@@ -444,45 +472,69 @@ export async function setAdminContribution(db: D1Database, input: AdminContribut
     throw new HttpError(400, "invalid_contribution", "贡献修正参数无效");
   }
   assertUnlocked(await getOrderRow(db, input.orderDate));
-  const menuItem = await db.prepare(
-    "SELECT id FROM menu_items WHERE id = ?",
-  ).bind(input.menuItemId).first();
+  const menuItem = await db.prepare("SELECT id FROM menu_items WHERE id = ?").bind(input.menuItemId).first();
   if (!menuItem) throw new HttpError(404, "menu_item_not_found", "菜品不存在");
 
-  await db.batch([
+  const results = await db.batch([
     ensureOrderStatement(db, input.orderDate, input.now),
     db.prepare(
       `INSERT INTO order_items
         (order_date, menu_item_id, name, price_cents, sort_order, created_at, updated_at)
        SELECT ?, id, name, price_cents, sort_order, ?, ?
        FROM menu_items
-       WHERE id = ?
+       WHERE id = ? AND ${ORDER_UNLOCKED_GUARD}
        ON CONFLICT(order_date, menu_item_id) DO NOTHING`,
-    ).bind(input.orderDate, input.now, input.now, input.menuItemId),
-    db.prepare("DELETE FROM order_contributions WHERE order_date = ? AND menu_item_id = ? AND device_id = ? AND ?")
-      .bind(input.orderDate, input.menuItemId, input.deviceId, input.quantity === 0 ? 1 : 0),
+    ).bind(input.orderDate, input.now, input.now, input.menuItemId, input.orderDate),
+    db.prepare(
+      `DELETE FROM order_contributions
+       WHERE order_date = ? AND menu_item_id = ? AND device_id = ? AND ?
+         AND ${ORDER_UNLOCKED_GUARD}`,
+    ).bind(input.orderDate, input.menuItemId, input.deviceId, input.quantity === 0 ? 1 : 0, input.orderDate),
     db.prepare(
       `INSERT INTO order_contributions (order_date, menu_item_id, device_id, display_name, quantity, updated_at)
-       SELECT ?, ?, ?, ?, ?, ? WHERE ?
+       SELECT ?, ?, ?, ?, ?, ?
+       WHERE ? AND ${ORDER_UNLOCKED_GUARD}
        ON CONFLICT(order_date, menu_item_id, device_id) DO UPDATE SET
          display_name = excluded.display_name,
          quantity = excluded.quantity,
          updated_at = excluded.updated_at`,
-    ).bind(input.orderDate, input.menuItemId, input.deviceId, displayName, input.quantity, input.now, input.quantity > 0 ? 1 : 0),
+    ).bind(
+      input.orderDate,
+      input.menuItemId,
+      input.deviceId,
+      displayName,
+      input.quantity,
+      input.now,
+      input.quantity > 0 ? 1 : 0,
+      input.orderDate,
+    ),
     db.prepare(
       `DELETE FROM order_items
-       WHERE order_date = ? AND menu_item_id = ?
+       WHERE order_date = ? AND menu_item_id = ? AND ${ORDER_UNLOCKED_GUARD}
          AND NOT EXISTS (
            SELECT 1 FROM order_contributions
            WHERE order_date = ? AND menu_item_id = ?
          )`,
-    ).bind(input.orderDate, input.menuItemId, input.orderDate, input.menuItemId),
-    db.prepare("UPDATE daily_orders SET revision = revision + 1, updated_at = ? WHERE order_date = ?")
-      .bind(input.now, input.orderDate),
+    ).bind(input.orderDate, input.menuItemId, input.orderDate, input.orderDate, input.menuItemId),
     db.prepare(
-      "INSERT INTO activity_log (order_date, device_id, display_name, action, details_json, created_at) VALUES (?, ?, ?, 'admin_correct_contribution', ?, ?)",
-    ).bind(input.orderDate, input.deviceId, displayName, JSON.stringify({ menuItemId: input.menuItemId, quantity: input.quantity }), input.now),
+      `UPDATE daily_orders SET revision = revision + 1, updated_at = ?
+       WHERE order_date = ? AND ${ORDER_UNLOCKED_GUARD}`,
+    ).bind(input.now, input.orderDate, input.orderDate),
+    db.prepare(
+      `INSERT INTO activity_log (order_date, device_id, display_name, action, details_json, created_at)
+       SELECT ?, ?, ?, 'admin_correct_contribution', ?, ?
+       WHERE ${ORDER_UNLOCKED_GUARD}`,
+    ).bind(
+      input.orderDate,
+      input.deviceId,
+      displayName,
+      JSON.stringify({ menuItemId: input.menuItemId, quantity: input.quantity }),
+      input.now,
+      input.orderDate,
+    ),
+    orderLockStatusStatement(db, input.orderDate),
   ]);
+  assertBatchRemainedUnlocked(results);
   return getOrderSnapshot(db, input.orderDate);
 }
 
@@ -537,18 +589,24 @@ export async function getOrderSnapshot(db: D1Database, orderDate: string): Promi
 
 export async function clearOrder(db: D1Database, input: AdminClearInput): Promise<OrderSnapshot> {
   assertUnlocked(await getOrderRow(db, input.orderDate));
-  await db.batch([
+  const results = await db.batch([
     ensureOrderStatement(db, input.orderDate, input.now),
-    db.prepare("DELETE FROM order_contributions WHERE order_date = ?").bind(input.orderDate),
-    db.prepare("DELETE FROM order_items WHERE order_date = ?").bind(input.orderDate),
-    db.prepare("UPDATE daily_orders SET revision = revision + 1, updated_at = ? WHERE order_date = ?")
-      .bind(input.now, input.orderDate),
-    db
-      .prepare(
-        "INSERT INTO activity_log (order_date, device_id, display_name, action, details_json, created_at) VALUES (?, ?, ?, 'clear_order', '{}', ?)",
-      )
-      .bind(input.orderDate, input.deviceId ?? null, input.displayName ?? null, input.now),
+    db.prepare(`DELETE FROM order_contributions WHERE order_date = ? AND ${ORDER_UNLOCKED_GUARD}`)
+      .bind(input.orderDate, input.orderDate),
+    db.prepare(`DELETE FROM order_items WHERE order_date = ? AND ${ORDER_UNLOCKED_GUARD}`)
+      .bind(input.orderDate, input.orderDate),
+    db.prepare(
+      `UPDATE daily_orders SET revision = revision + 1, updated_at = ?
+       WHERE order_date = ? AND ${ORDER_UNLOCKED_GUARD}`,
+    ).bind(input.now, input.orderDate, input.orderDate),
+    db.prepare(
+      `INSERT INTO activity_log (order_date, device_id, display_name, action, details_json, created_at)
+       SELECT ?, ?, ?, 'clear_order', '{}', ?
+       WHERE ${ORDER_UNLOCKED_GUARD}`,
+    ).bind(input.orderDate, input.deviceId ?? null, input.displayName ?? null, input.now, input.orderDate),
+    orderLockStatusStatement(db, input.orderDate),
   ]);
+  assertBatchRemainedUnlocked(results);
   return getOrderSnapshot(db, input.orderDate);
 }
 
