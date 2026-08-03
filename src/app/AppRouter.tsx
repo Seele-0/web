@@ -49,7 +49,7 @@ function HistoryDetailRoute() {
   const navigate = useNavigate();
   const { date = "" } = useParams();
   const { search } = useLocation();
-  const mealPeriod = new URLSearchParams(search).get("mealPeriod") === "dinner" ? "dinner" : "lunch";
+  const mealPeriod = new URLSearchParams(search).get("mealPeriod") === "lunch" ? "lunch" : "dinner";
   const [order, setOrder] = useState<OrderSnapshot | null>(null);
   const [error, setError] = useState("");
 

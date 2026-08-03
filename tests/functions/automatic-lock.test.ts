@@ -45,22 +45,22 @@ describe("automatic order locking", () => {
     expect((await env.DB.prepare("SELECT COUNT(*) AS count FROM automatic_order_locks WHERE order_date = ?").bind("2026-07-30#lunch").first<{ count: number }>())?.count).toBe(1);
   });
 
-  it("continues treating a legacy date-only order as lunch", async () => {
+  it("treats a legacy date-only order as dinner", async () => {
     await env.DB.prepare(
       "INSERT INTO daily_orders (order_date, share_count, revision, locked, updated_at) VALUES (?, 1, 0, 0, ?)",
     ).bind("2026-07-30", "2026-07-30T06:00:00.000Z").run();
 
     await ensureAutomaticLock(env.DB, {
       orderDate: "2026-07-30",
-      mealPeriod: "lunch",
-      now: "2026-07-30T07:00:00.000Z",
+      mealPeriod: "dinner",
+      now: "2026-07-30T13:00:00.000Z",
       source: "cron",
-      executionToken: "cron-legacy-lunch",
+      executionToken: "cron-legacy-dinner",
     });
 
-    expect((await getOrderSnapshot(env.DB, "2026-07-30", "lunch")).locked).toBe(true);
+    expect((await getOrderSnapshot(env.DB, "2026-07-30", "dinner")).locked).toBe(true);
     expect((await env.DB.prepare("SELECT locked FROM daily_orders WHERE order_date = ?").bind("2026-07-30").first<{ locked: number }>())?.locked).toBe(1);
-    expect((await env.DB.prepare("SELECT order_date FROM daily_orders WHERE order_date = ?").bind("2026-07-30#lunch").first()) ).toBeNull();
+    expect((await env.DB.prepare("SELECT order_date FROM daily_orders WHERE order_date = ?").bind("2026-07-30#dinner").first()) ).toBeNull();
   });
 
   it("keeps lunch and dinner locks independent", async () => {

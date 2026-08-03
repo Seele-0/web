@@ -105,7 +105,7 @@ async function getOrderRow(db: D1Database, orderDate: string): Promise<OrderRow 
     .first<OrderRow>();
 }
 
-/** Resolves an explicit lunch request to the legacy date-only order when one exists. */
+/** Resolves an explicit dinner request to the legacy date-only order when one exists. */
 export async function resolveOrderStorageId(
   db: D1Database,
   orderDate: string,
@@ -113,13 +113,14 @@ export async function resolveOrderStorageId(
 ): Promise<string> {
   if (!mealPeriod) return orderDate;
   const storageId = getOrderStorageId(orderDate, mealPeriod);
-  if (mealPeriod !== "lunch") return storageId;
+  if (mealPeriod !== "dinner") return storageId;
 
-  const [slotOrder, legacyOrder] = await db.batch([
+  const results = await db.batch([
     db.prepare("SELECT order_date FROM daily_orders WHERE order_date = ?").bind(storageId),
     db.prepare("SELECT order_date FROM daily_orders WHERE order_date = ?").bind(orderDate),
   ]);
-  if ((slotOrder.results?.length ?? 0) > 0 || (legacyOrder.results?.length ?? 0) === 0) return storageId;
+  const [slotOrder, legacyOrder] = results;
+  if ((slotOrder?.results?.length ?? 0) > 0 || (legacyOrder?.results?.length ?? 0) === 0) return storageId;
   return orderDate;
 }
 

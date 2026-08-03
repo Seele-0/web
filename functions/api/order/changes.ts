@@ -2,9 +2,9 @@ import { runAutomaticLockFallback } from "../../_lib/automatic-lock";
 import type { Env } from "../../_lib/env";
 import { errorResponse, HttpError, json } from "../../_lib/http";
 import { getMenuConfiguration } from "../../_lib/menu-repository";
-import { getOrderSnapshot } from "../../_lib/order-repository";
+import { getOrderSnapshot, resolveOrderStorageId } from "../../_lib/order-repository";
 import { getSyncRevisions } from "../../_lib/sync-repository";
-import { getOrderStorageId, isMealPeriod } from "../../../src/domain/meal-period";
+import { isMealPeriod } from "../../../src/domain/meal-period";
 
 export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
   try {
@@ -16,7 +16,8 @@ export const onRequestGet: PagesFunction<Env> = async ({ request, env }) => {
     const configurationSinceParam = url.searchParams.get("configurationSince");
     const configurationSince = configurationSinceParam === null ? 0 : Number(configurationSinceParam);
     if (!/^\d{4}-\d{2}-\d{2}$/.test(orderDate) || !isMealPeriod(mealPeriod) || !Number.isInteger(since) || since < 0 || !Number.isInteger(configurationSince) || configurationSince < 0) throw new HttpError(400, "invalid_poll_request", "轮询参数无效");
-    const revisions = await getSyncRevisions(env.DB, getOrderStorageId(orderDate, mealPeriod));
+    const storageId = await resolveOrderStorageId(env.DB, orderDate, mealPeriod);
+    const revisions = await getSyncRevisions(env.DB, storageId);
     const orderChanged = revisions.revision !== since;
     const configurationChanged = revisions.configurationRevision !== configurationSince;
     if (!orderChanged && !configurationChanged) return json({ changed: false, revision: revisions.revision, configurationRevision: revisions.configurationRevision }, { headers: { "Cache-Control": "no-store" } });

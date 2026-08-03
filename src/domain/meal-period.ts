@@ -24,7 +24,7 @@ export function getOrderStorageId(orderDate: string, mealPeriod?: MealPeriod): s
 
 export function getOrderSlotFromStorageId(storageId: string): { orderDate: string; mealPeriod: MealPeriod } {
   const match = ORDER_STORAGE_ID_PATTERN.exec(storageId);
-  return match ? { orderDate: match[1], mealPeriod: match[2] as MealPeriod } : { orderDate: storageId, mealPeriod: "lunch" };
+  return match ? { orderDate: match[1], mealPeriod: match[2] as MealPeriod } : { orderDate: storageId, mealPeriod: "dinner" };
 }
 
 export function getShanghaiMealPeriod(date = new Date()): MealPeriod {

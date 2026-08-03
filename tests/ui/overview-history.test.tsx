@@ -58,10 +58,10 @@ it("sorts history newest first and opens the selected date", async () => {
   ]} onBack={vi.fn()} onSelect={onSelect} />);
 
   const entries = screen.getAllByRole("button", { name: /查看 2026年7月/ });
-  expect(entries[0]).toHaveAccessibleName("查看 2026年7月29日中午订单");
-  expect(entries[1]).toHaveAccessibleName("查看 2026年7月28日中午订单");
+  expect(entries[0]).toHaveAccessibleName("查看 2026年7月29日晚上订单");
+  expect(entries[1]).toHaveAccessibleName("查看 2026年7月28日晚上订单");
   await userEvent.click(entries[0]);
-  expect(onSelect).toHaveBeenCalledWith("2026-07-29", "lunch");
+  expect(onSelect).toHaveBeenCalledWith("2026-07-29", "dinner");
 });
 
 it("renders historical order detail as read-only", () => {

@@ -138,9 +138,30 @@ describe("order APIs", () => {
     const response = await history(context(new Request("https://example.test/api/history")));
     expect((await response.json() as any).dates.map((item: any) => `${item.orderDate}:${item.mealPeriod}`)).toEqual([
       "2026-07-29:dinner",
-      "2026-07-29:lunch",
-      "2026-07-28:lunch",
+      "2026-07-28:dinner",
     ]);
+  });
+
+  it("reads date-only legacy history as a dinner order", async () => {
+    await env.DB.batch([
+      env.DB.prepare("INSERT INTO daily_orders (order_date, share_count, revision, locked, updated_at) VALUES ('2026-07-27', 2, 1, 1, CURRENT_TIMESTAMP)"),
+      env.DB.prepare("INSERT INTO order_items (order_date, menu_item_id, name, price_cents, sort_order, created_at, updated_at) VALUES ('2026-07-27', 'dish-suan-cai-yu', '酸菜鱼', 6800, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"),
+      env.DB.prepare("INSERT INTO order_contributions (order_date, menu_item_id, device_id, display_name, quantity, updated_at) VALUES ('2026-07-27', 'dish-suan-cai-yu', 'legacy-device', '历史用户', 2, CURRENT_TIMESTAMP)"),
+    ]);
+
+    const response = await historyDetail(context(
+      new Request("https://example.test/api/history/2026-07-27?mealPeriod=dinner"),
+      { date: "2026-07-27" },
+    ));
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      orderDate: "2026-07-27",
+      mealPeriod: "dinner",
+      shareCount: 2,
+      totalQuantity: 2,
+      totalCents: 13_600,
+    });
   });
 
   it("uses the ordered price snapshot for history totals and detail", async () => {
@@ -158,7 +179,7 @@ describe("order APIs", () => {
     }));
 
     const detailResponse = await historyDetail(context(
-      new Request(`https://example.test/api/history/${today}`),
+      new Request(`https://example.test/api/history/${today}?mealPeriod=lunch`),
       { date: today },
     ));
     expect(await detailResponse.json()).toMatchObject({
