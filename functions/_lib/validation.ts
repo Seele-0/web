@@ -1,5 +1,6 @@
 import { getShanghaiBusinessDate } from "./date";
 import { HttpError } from "./http";
+import { isMealPeriod, type MealPeriod } from "../../src/domain/meal-period";
 
 const ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{2,127}$/;
 const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
@@ -7,6 +8,7 @@ const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 export type AdjustRequest = {
   operationId: string;
   orderDate: string;
+  mealPeriod: MealPeriod;
   menuItemId: string;
   deviceId: string;
   displayName: string;
@@ -30,6 +32,10 @@ function identifier(value: unknown, field: string): string {
 export function parseAdjustRequest(input: unknown, today = getShanghaiBusinessDate()): AdjustRequest {
   const value = objectValue(input);
   const orderDate = typeof value.orderDate === "string" ? value.orderDate : "";
+  const mealPeriod = value.mealPeriod === undefined ? "lunch" : value.mealPeriod;
+  if (!isMealPeriod(mealPeriod)) {
+    throw new HttpError(400, "invalid_meal_period", "点餐时段无效");
+  }
   if (!DATE_PATTERN.test(orderDate)) {
     throw new HttpError(400, "invalid_date", "订单日期格式无效");
   }
@@ -47,6 +53,7 @@ export function parseAdjustRequest(input: unknown, today = getShanghaiBusinessDa
   return {
     operationId: identifier(value.operationId, "operationId"),
     orderDate,
+    mealPeriod,
     menuItemId: identifier(value.menuItemId, "menuItemId"),
     deviceId: identifier(value.deviceId, "deviceId"),
     displayName,
@@ -58,6 +65,7 @@ export function parseAdjustRequest(input: unknown, today = getShanghaiBusinessDa
 export type ShareCountRequest = {
   operationId: string;
   orderDate: string;
+  mealPeriod: MealPeriod;
   deviceId: string;
   displayName: string;
   shareCount: number;
@@ -66,6 +74,10 @@ export type ShareCountRequest = {
 export function parseShareCountRequest(input: unknown, today = getShanghaiBusinessDate()): ShareCountRequest {
   const value = objectValue(input);
   const orderDate = typeof value.orderDate === "string" ? value.orderDate : "";
+  const mealPeriod = value.mealPeriod === undefined ? "lunch" : value.mealPeriod;
+  if (!isMealPeriod(mealPeriod)) {
+    throw new HttpError(400, "invalid_meal_period", "点餐时段无效");
+  }
   if (!DATE_PATTERN.test(orderDate)) {
     throw new HttpError(400, "invalid_date", "订单日期格式无效");
   }
@@ -82,6 +94,7 @@ export function parseShareCountRequest(input: unknown, today = getShanghaiBusine
   return {
     operationId: identifier(value.operationId, "operationId"),
     orderDate,
+    mealPeriod,
     deviceId: identifier(value.deviceId, "deviceId"),
     displayName,
     shareCount: value.shareCount as number,

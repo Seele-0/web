@@ -1,4 +1,6 @@
 import type { HistorySummary } from "../api/client";
+import type { MealPeriod } from "../domain/meal-period";
+import { MEAL_PERIOD_LABEL } from "../domain/meal-period";
 import { formatCents } from "../domain/money";
 
 type HistoryListPageProps = {
@@ -6,7 +8,7 @@ type HistoryListPageProps = {
   loading?: boolean;
   error?: string;
   onBack: () => void;
-  onSelect: (date: string) => void;
+  onSelect: (date: string, mealPeriod: MealPeriod) => void;
 };
 
 export function formatOrderDate(value: string): string {
@@ -15,7 +17,7 @@ export function formatOrderDate(value: string): string {
 }
 
 export function HistoryListPage({ dates, loading = false, error, onBack, onSelect }: HistoryListPageProps) {
-  const sortedDates = [...dates].sort((a, b) => b.orderDate.localeCompare(a.orderDate));
+  const sortedDates = [...dates].sort((a, b) => (b.orderDate.localeCompare(a.orderDate) || (b.mealPeriod ?? "lunch").localeCompare(a.mealPeriod ?? "lunch")));
 
   return (
     <div className="secondary-page history-page">
@@ -35,8 +37,8 @@ export function HistoryListPage({ dates, loading = false, error, onBack, onSelec
         {sortedDates.map((entry) => {
           const dateLabel = formatOrderDate(entry.orderDate);
           return (
-            <button key={entry.orderDate} type="button" className="history-card" aria-label={`查看 ${dateLabel}订单`} onClick={() => onSelect(entry.orderDate)}>
-              <span className="history-date">{dateLabel}</span>
+            <button key={`${entry.orderDate}-${entry.mealPeriod ?? "lunch"}`} type="button" className="history-card" aria-label={`查看 ${dateLabel}${MEAL_PERIOD_LABEL[entry.mealPeriod ?? "lunch"]}订单`} onClick={() => onSelect(entry.orderDate, entry.mealPeriod ?? "lunch")}>
+              <span className="history-date">{dateLabel} · {MEAL_PERIOD_LABEL[entry.mealPeriod ?? "lunch"]}</span>
               <span className="history-meta">{entry.totalQuantity} 份 · 均摊 {entry.shareCount} 人</span>
               <strong>{formatCents(entry.totalCents)}</strong>
               <span className="history-chevron" aria-hidden="true">›</span>

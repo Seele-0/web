@@ -1,5 +1,5 @@
 import { runAutomaticLockFallback } from "../../../_lib/automatic-lock";
-import { requireIdentifier, requireOrderDate } from "../../../_lib/admin-input";
+import { requireIdentifier, requireMealPeriod, requireOrderDate } from "../../../_lib/admin-input";
 import { errorResponse, HttpError, json, readJson } from "../../../_lib/http";
 import { verifyAdminRequest } from "../../../_lib/admin-session";
 import type { Env } from "../../../_lib/env";
@@ -11,6 +11,7 @@ export const onRequestPut: PagesFunction<Env> = async ({ request, env }) => {
     await runAutomaticLockFallback(env.DB);
     const input = await readJson<Record<string, unknown>>(request);
     const orderDate = requireOrderDate(input.orderDate);
+    const mealPeriod = requireMealPeriod(input.mealPeriod);
     const menuItemId = requireIdentifier(input.menuItemId, "invalid_contribution", "贡献修正参数无效");
     const deviceId = requireIdentifier(input.deviceId, "invalid_contribution", "贡献修正参数无效");
     const displayName = typeof input.displayName === "string" ? input.displayName.trim() : "";
@@ -20,6 +21,7 @@ export const onRequestPut: PagesFunction<Env> = async ({ request, env }) => {
     }
     return json(await setAdminContribution(env.DB, {
       orderDate,
+      mealPeriod,
       menuItemId,
       deviceId,
       displayName,

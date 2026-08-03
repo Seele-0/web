@@ -1,15 +1,9 @@
 import { runAutomaticLockFallback } from "../../_lib/automatic-lock";
 import type { Env } from "../../_lib/env";
 import { errorResponse, json } from "../../_lib/http";
+import { getOrderSlotFromStorageId } from "../../../src/domain/meal-period";
 
-type HistoryRow = {
-  order_date: string;
-  share_count: number;
-  revision: number;
-  locked: number;
-  total_quantity: number;
-  total_cents: number;
-};
+type HistoryRow = { order_date: string; share_count: number; revision: number; locked: number; total_quantity: number; total_cents: number };
 
 export const onRequestGet: PagesFunction<Env> = async ({ env }) => {
   try {
@@ -20,22 +14,10 @@ export const onRequestGet: PagesFunction<Env> = async ({ env }) => {
               COALESCE(SUM(c.quantity * i.price_cents), 0) AS total_cents
        FROM daily_orders o
        LEFT JOIN order_contributions c ON c.order_date = o.order_date AND c.quantity > 0
-       LEFT JOIN order_items i
-         ON i.order_date = c.order_date AND i.menu_item_id = c.menu_item_id
+       LEFT JOIN order_items i ON i.order_date = c.order_date AND i.menu_item_id = c.menu_item_id
        GROUP BY o.order_date, o.share_count, o.revision, o.locked
        ORDER BY o.order_date DESC`,
     ).all<HistoryRow>();
-    return json({
-      dates: result.results.map((row) => ({
-        orderDate: row.order_date,
-        shareCount: row.share_count,
-        revision: row.revision,
-        locked: Boolean(row.locked),
-        totalQuantity: row.total_quantity,
-        totalCents: row.total_cents,
-      })),
-    });
-  } catch (error) {
-    return errorResponse(error);
-  }
+    return json({ dates: result.results.map((row) => ({ ...getOrderSlotFromStorageId(row.order_date), shareCount: row.share_count, revision: row.revision, locked: Boolean(row.locked), totalQuantity: row.total_quantity, totalCents: row.total_cents })) });
+  } catch (error) { return errorResponse(error); }
 };

@@ -99,3 +99,12 @@ it.each(["", "0", "1.5", "101"])("rejects invalid share count %j and restores th
   expect(onShareCount).not.toHaveBeenCalled();
   alert.mockRestore();
 });
+
+it("lets diners switch between lunch and dinner orders and shows their lock times", async () => {
+  const onMealPeriodChange = vi.fn();
+  render(<MenuPage restaurantName="今日点餐" date="2026年7月30日" mealPeriod="lunch" onMealPeriodChange={onMealPeriodChange} displayName="张三" deviceId="device-a" status="synced" menu={menu} order={order} onAdjust={vi.fn()} onShareCount={vi.fn()} onOverview={vi.fn()} onEditName={vi.fn()} />);
+  expect(screen.getByRole("tab", { name: /中午点单/ })).toHaveTextContent("15:00 锁单");
+  expect(screen.getByRole("tab", { name: /晚上点单/ })).toHaveTextContent("21:00 锁单");
+  await userEvent.click(screen.getByRole("tab", { name: /晚上点单/ }));
+  expect(onMealPeriodChange).toHaveBeenCalledWith("dinner");
+});

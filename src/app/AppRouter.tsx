@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { MemoryRouter, Navigate, Route, Routes, useInRouterContext, useNavigate, useParams } from "react-router-dom";
+import { MemoryRouter, Navigate, Route, Routes, useInRouterContext, useLocation, useNavigate, useParams } from "react-router-dom";
 import { apiClient, type HistorySummary, type OrderSnapshot } from "../api/client";
 import { AdminPage } from "../admin/AdminPage";
 import type { SyncState } from "../components/SyncStatus";
@@ -8,11 +8,14 @@ import { HistoryListPage } from "../history/HistoryListPage";
 import { MenuPage } from "../menu/MenuPage";
 import { OrderOverviewPage } from "../overview/OrderOverviewPage";
 import type { MenuItem } from "../domain/types";
+import type { MealPeriod } from "../domain/meal-period";
 import { getShanghaiBusinessDate } from "../domain/date";
 
 type AppRouterProps = {
   restaurantName: string;
   date: string;
+  mealPeriod?: MealPeriod;
+  onMealPeriodChange?: (mealPeriod: MealPeriod) => void;
   displayName: string;
   deviceId: string;
   status: SyncState;
@@ -39,22 +42,24 @@ function HistoryListRoute() {
     return () => { active = false; };
   }, []);
 
-  return <HistoryListPage dates={dates} loading={loading} error={error} onBack={() => navigate("/")} onSelect={(date) => navigate(`/history/${date}`)} />;
+  return <HistoryListPage dates={dates} loading={loading} error={error} onBack={() => navigate("/")} onSelect={(date, mealPeriod) => navigate(`/history/${date}?mealPeriod=${mealPeriod}`)} />;
 }
 
 function HistoryDetailRoute() {
   const navigate = useNavigate();
   const { date = "" } = useParams();
+  const { search } = useLocation();
+  const mealPeriod = new URLSearchParams(search).get("mealPeriod") === "dinner" ? "dinner" : "lunch";
   const [order, setOrder] = useState<OrderSnapshot | null>(null);
   const [error, setError] = useState("");
 
   useEffect(() => {
     let active = true;
-    apiClient.historyDetail(date)
+    apiClient.historyDetail(date, mealPeriod)
       .then((value) => { if (active) setOrder(value); })
       .catch((caught) => { if (active) setError(caught instanceof Error ? caught.message : "历史订单加载失败"); });
     return () => { active = false; };
-  }, [date]);
+  }, [date, mealPeriod]);
 
   if (error) return <div className="secondary-page"><p className="secondary-error" role="alert">{error}</p><button type="button" className="plain-action" onClick={() => navigate("/history")}>返回历史订单</button></div>;
   if (!order) return <div className="secondary-page"><p className="secondary-empty" role="status">正在加载历史订单…</p></div>;
@@ -70,6 +75,8 @@ function AppRoutes(props: AppRouterProps) {
         <MenuPage
           restaurantName={props.restaurantName}
           date={props.date}
+          mealPeriod={props.mealPeriod}
+          onMealPeriodChange={props.onMealPeriodChange}
           displayName={props.displayName}
           deviceId={props.deviceId}
           status={props.status}

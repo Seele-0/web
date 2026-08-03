@@ -2,7 +2,7 @@ import { applyD1Migrations, env, reset } from "cloudflare:test";
 import { afterAll, beforeEach, vi } from "vitest";
 
 vi.useFakeTimers();
-vi.setSystemTime(new Date("2026-07-30T12:00:00.000Z"));
+vi.setSystemTime(new Date("2026-07-30T02:00:00.000Z"));
 
 beforeEach(async () => {
   await reset();

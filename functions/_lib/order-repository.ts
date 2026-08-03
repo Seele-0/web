@@ -1,5 +1,6 @@
 import { parseOrderImportText } from "../../src/domain/import-text";
 import { HttpError } from "./http";
+import { getOrderSlotFromStorageId, getOrderStorageId, type MealPeriod } from "../../src/domain/meal-period";
 
 export const ADMIN_IMPORT_DEVICE_ID = "admin-import";
 export const ADMIN_IMPORT_DISPLAY_NAME = "管理员导入";
@@ -7,6 +8,7 @@ export const ADMIN_IMPORT_DISPLAY_NAME = "管理员导入";
 export type AdjustInput = {
   operationId: string;
   orderDate: string;
+  mealPeriod?: MealPeriod;
   menuItemId: string;
   deviceId: string;
   displayName: string;
@@ -17,6 +19,7 @@ export type AdjustInput = {
 export type ShareCountInput = {
   operationId: string;
   orderDate: string;
+  mealPeriod?: MealPeriod;
   deviceId: string;
   displayName: string;
   shareCount: number;
@@ -25,23 +28,26 @@ export type ShareCountInput = {
 
 export type AdminClearInput = {
   orderDate: string;
+  mealPeriod?: MealPeriod;
   deviceId?: string;
   displayName?: string;
   now: string;
 };
 
 export type AdminLockInput = AdminClearInput & { locked: boolean };
-export type ReplaceOrderInput = { orderDate: string; text: string; now: string };
+export type ReplaceOrderInput = { orderDate: string; mealPeriod?: MealPeriod; text: string; now: string };
 export type AdminOrderItemInput = {
   orderDate: string;
+  mealPeriod?: MealPeriod;
   name: string;
   priceCents: number;
   quantity: number;
   now: string;
 };
-export type DeleteOrderItemInput = { orderDate: string; menuItemId: string; now: string };
+export type DeleteOrderItemInput = { orderDate: string; mealPeriod?: MealPeriod; menuItemId: string; now: string };
 export type AdminContributionInput = {
   orderDate: string;
+  mealPeriod?: MealPeriod;
   menuItemId: string;
   deviceId: string;
   displayName: string;
@@ -51,6 +57,7 @@ export type AdminContributionInput = {
 
 export type OrderSnapshot = {
   orderDate: string;
+  mealPeriod: MealPeriod;
   shareCount: number;
   revision: number;
   locked: boolean;
@@ -96,6 +103,24 @@ async function getOrderRow(db: D1Database, orderDate: string): Promise<OrderRow 
     .prepare("SELECT share_count, revision, locked FROM daily_orders WHERE order_date = ?")
     .bind(orderDate)
     .first<OrderRow>();
+}
+
+/** Resolves an explicit lunch request to the legacy date-only order when one exists. */
+export async function resolveOrderStorageId(
+  db: D1Database,
+  orderDate: string,
+  mealPeriod?: MealPeriod,
+): Promise<string> {
+  if (!mealPeriod) return orderDate;
+  const storageId = getOrderStorageId(orderDate, mealPeriod);
+  if (mealPeriod !== "lunch") return storageId;
+
+  const [slotOrder, legacyOrder] = await db.batch([
+    db.prepare("SELECT order_date FROM daily_orders WHERE order_date = ?").bind(storageId),
+    db.prepare("SELECT order_date FROM daily_orders WHERE order_date = ?").bind(orderDate),
+  ]);
+  if ((slotOrder.results?.length ?? 0) > 0 || (legacyOrder.results?.length ?? 0) === 0) return storageId;
+  return orderDate;
 }
 
 function assertUnlocked(order: OrderRow | null): void {
@@ -192,6 +217,7 @@ function validateAdminOrderItem(input: AdminOrderItemInput): { name: string; pri
 }
 
 export async function adjustContribution(db: D1Database, input: AdjustInput): Promise<OrderSnapshot> {
+  input = { ...input, orderDate: await resolveOrderStorageId(db, input.orderDate, input.mealPeriod) };
   if (await operationExists(db, input.operationId)) {
     return getOrderSnapshot(db, input.orderDate);
   }
@@ -297,6 +323,7 @@ export async function adjustContribution(db: D1Database, input: AdjustInput): Pr
 }
 
 export async function setShareCount(db: D1Database, input: ShareCountInput): Promise<OrderSnapshot> {
+  input = { ...input, orderDate: await resolveOrderStorageId(db, input.orderDate, input.mealPeriod) };
   if (!Number.isInteger(input.shareCount) || input.shareCount < 1 || input.shareCount > 100) {
     throw new HttpError(400, "invalid_share_count", "份数必须为 1 到 100 的整数");
   }
@@ -344,6 +371,7 @@ export async function setShareCount(db: D1Database, input: ShareCountInput): Pro
 }
 
 export async function replaceOrderFromText(db: D1Database, input: ReplaceOrderInput): Promise<OrderSnapshot> {
+  input = { ...input, orderDate: await resolveOrderStorageId(db, input.orderDate, input.mealPeriod) };
   assertUnlocked(await getOrderRow(db, input.orderDate));
   const parsed = parseOrderImportText(input.text);
   if (parsed.errors.length > 0 || parsed.items.length === 0) {
@@ -410,6 +438,7 @@ export async function replaceOrderFromText(db: D1Database, input: ReplaceOrderIn
 }
 
 export async function upsertAdminOrderItem(db: D1Database, input: AdminOrderItemInput): Promise<OrderSnapshot> {
+  input = { ...input, orderDate: await resolveOrderStorageId(db, input.orderDate, input.mealPeriod) };
   const { name, priceCents, quantity } = validateAdminOrderItem(input);
   assertUnlocked(await getOrderRow(db, input.orderDate));
   const serializedItems = serializedAdminMenuItems([{ name, priceCents }]);
@@ -484,6 +513,7 @@ export async function upsertAdminOrderItem(db: D1Database, input: AdminOrderItem
 }
 
 export async function deleteOrderItem(db: D1Database, input: DeleteOrderItemInput): Promise<OrderSnapshot> {
+  input = { ...input, orderDate: await resolveOrderStorageId(db, input.orderDate, input.mealPeriod) };
   assertUnlocked(await getOrderRow(db, input.orderDate));
   const results = await db.batch([
     db.prepare(
@@ -510,6 +540,7 @@ export async function deleteOrderItem(db: D1Database, input: DeleteOrderItemInpu
 }
 
 export async function setAdminContribution(db: D1Database, input: AdminContributionInput): Promise<OrderSnapshot> {
+  input = { ...input, orderDate: await resolveOrderStorageId(db, input.orderDate, input.mealPeriod) };
   const displayName = input.displayName.trim();
   if (!input.menuItemId || !input.deviceId || displayName.length < 1 || displayName.length > 30
     || !Number.isInteger(input.quantity) || input.quantity < 0 || input.quantity > 999) {
@@ -582,8 +613,10 @@ export async function setAdminContribution(db: D1Database, input: AdminContribut
   return getOrderSnapshot(db, input.orderDate);
 }
 
-export async function getOrderSnapshot(db: D1Database, orderDate: string): Promise<OrderSnapshot> {
-  const order = await getOrderRow(db, orderDate);
+export async function getOrderSnapshot(db: D1Database, orderDate: string, mealPeriod?: MealPeriod): Promise<OrderSnapshot> {
+  const storageId = await resolveOrderStorageId(db, orderDate, mealPeriod);
+  const slot = getOrderSlotFromStorageId(storageId);
+  const order = await getOrderRow(db, storageId);
   const rows = await db
     .prepare(
       `SELECT c.menu_item_id, i.name, i.price_cents, i.sort_order,
@@ -594,7 +627,7 @@ export async function getOrderSnapshot(db: D1Database, orderDate: string): Promi
        WHERE c.order_date = ? AND c.quantity > 0
        ORDER BY i.sort_order, c.device_id`,
     )
-    .bind(orderDate)
+    .bind(storageId)
     .all<ContributionRow>();
 
   const dishMap = new Map<string, OrderSnapshot["dishes"][number]>();
@@ -621,7 +654,8 @@ export async function getOrderSnapshot(db: D1Database, orderDate: string): Promi
   }
   const dishes = [...dishMap.values()];
   return {
-    orderDate,
+    orderDate: slot.orderDate,
+    mealPeriod: slot.mealPeriod,
     shareCount: order?.share_count ?? 1,
     revision: order?.revision ?? 0,
     locked: Boolean(order?.locked),
@@ -632,6 +666,7 @@ export async function getOrderSnapshot(db: D1Database, orderDate: string): Promi
 }
 
 export async function clearOrder(db: D1Database, input: AdminClearInput): Promise<OrderSnapshot> {
+  input = { ...input, orderDate: await resolveOrderStorageId(db, input.orderDate, input.mealPeriod) };
   assertUnlocked(await getOrderRow(db, input.orderDate));
   const results = await db.batch([
     ensureOrderStatement(db, input.orderDate, input.now),
@@ -655,6 +690,7 @@ export async function clearOrder(db: D1Database, input: AdminClearInput): Promis
 }
 
 export async function setOrderLocked(db: D1Database, input: AdminLockInput): Promise<void> {
+  input = { ...input, orderDate: await resolveOrderStorageId(db, input.orderDate, input.mealPeriod) };
   await db.batch([
     ensureOrderStatement(db, input.orderDate, input.now),
     db

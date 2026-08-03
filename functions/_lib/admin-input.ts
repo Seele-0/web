@@ -1,4 +1,5 @@
 import { HttpError } from "./http";
+import { isMealPeriod, type MealPeriod } from "../../src/domain/meal-period";
 
 const ORDER_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 const IDENTIFIER_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
@@ -36,5 +37,11 @@ export function requireQuantity(value: unknown, code = "invalid_order_item_quant
   if (typeof value !== "number" || !Number.isInteger(value) || value < 1 || value > 999) {
     throw new HttpError(400, code, "菜品数量必须为 1 到 999 的整数");
   }
+  return value;
+}
+
+export function requireMealPeriod(value: unknown): MealPeriod {
+  if (value === undefined) return "lunch";
+  if (!isMealPeriod(value)) throw new HttpError(400, "invalid_meal_period", "点餐时段无效");
   return value;
 }

@@ -11,7 +11,7 @@ function formatBusinessDate(value: string): string {
 }
 
 function OrderingApp({ identity, onEditName }: { identity: ActiveIdentity; onEditName: () => void }) {
-  const { date, restaurantName, menu, order, status, adjust, setShareCount, refresh } = useOrderSync(identity);
+  const { date, mealPeriod, setMealPeriod, restaurantName, menu, order, status, adjust, setShareCount, refresh } = useOrderSync(identity);
 
   return (
     <>
@@ -19,6 +19,8 @@ function OrderingApp({ identity, onEditName }: { identity: ActiveIdentity; onEdi
       <AppRouter
         restaurantName={restaurantName}
         date={formatBusinessDate(date)}
+        mealPeriod={mealPeriod}
+        onMealPeriodChange={setMealPeriod}
         displayName={identity.displayName}
         deviceId={identity.deviceId}
         status={status}

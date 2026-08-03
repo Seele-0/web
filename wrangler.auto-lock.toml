@@ -3,7 +3,7 @@ main = "workers/auto-lock.ts"
 compatibility_date = "2026-07-30"
 
 [triggers]
-crons = ["59 15 * * *"]
+crons = ["0 7 * * *", "0 13 * * *"]
 
 [[d1_databases]]
 binding = "DB"

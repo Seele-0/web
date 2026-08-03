@@ -136,7 +136,7 @@ describe("administrator APIs", () => {
     expect(await shareCount.json()).toMatchObject({ orderDate: "2026-07-30", shareCount: 3 });
     expect((await lockOrder(context(jsonRequest("/api/admin/order/lock", "PUT", { orderDate: "2026-07-30", locked: true }, cookie)))).status).toBe(200);
     expect((await env.DB.prepare("SELECT value FROM settings WHERE key = 'restaurant_name'").first<{ value: string }>())?.value).toBe("暖味小馆");
-    expect((await getOrderSnapshot(env.DB, "2026-07-30")).locked).toBe(true);
+    expect((await getOrderSnapshot(env.DB, "2026-07-30", "lunch")).locked).toBe(true);
   });
 
   it("corrects contributions and clears them without deleting audit records", async () => {
@@ -145,10 +145,10 @@ describe("administrator APIs", () => {
       orderDate: "2026-07-30", menuItemId: "dish-suan-cai-yu", deviceId: "device-a", displayName: "张三", quantity: 3,
     }, cookie)));
     expect(correction.status).toBe(200);
-    expect((await getOrderSnapshot(env.DB, "2026-07-30")).totalQuantity).toBe(3);
+    expect((await getOrderSnapshot(env.DB, "2026-07-30", "lunch")).totalQuantity).toBe(3);
     const clear = await clearOrderRoute(context(jsonRequest("/api/admin/order/clear", "POST", { orderDate: "2026-07-30" }, cookie)));
     expect(clear.status).toBe(200);
-    expect((await getOrderSnapshot(env.DB, "2026-07-30")).totalQuantity).toBe(0);
+    expect((await getOrderSnapshot(env.DB, "2026-07-30", "lunch")).totalQuantity).toBe(0);
     expect((await env.DB.prepare("SELECT COUNT(*) AS count FROM activity_log").first<{ count: number }>())!.count).toBeGreaterThan(0);
   });
 

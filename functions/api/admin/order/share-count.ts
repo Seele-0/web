@@ -1,6 +1,6 @@
 import { runAutomaticLockFallback } from "../../../_lib/automatic-lock";
 import { verifyAdminRequest } from "../../../_lib/admin-session";
-import { requireOrderDate } from "../../../_lib/admin-input";
+import { requireMealPeriod, requireOrderDate } from "../../../_lib/admin-input";
 import type { Env } from "../../../_lib/env";
 import { errorResponse, HttpError, json, readJson } from "../../../_lib/http";
 import {
@@ -14,8 +14,9 @@ export const onRequestPut: PagesFunction<Env> = async ({ request, env }) => {
     await verifyAdminRequest(request, env);
     await runAutomaticLockFallback(env.DB);
 
-    const input = await readJson<{ orderDate?: unknown; shareCount?: unknown }>(request);
+    const input = await readJson<{ orderDate?: unknown; mealPeriod?: unknown; shareCount?: unknown }>(request);
     const orderDate = requireOrderDate(input.orderDate);
+    const mealPeriod = requireMealPeriod(input.mealPeriod);
     if (
       typeof input.shareCount !== "number"
       || !Number.isInteger(input.shareCount)
@@ -28,6 +29,7 @@ export const onRequestPut: PagesFunction<Env> = async ({ request, env }) => {
     return json(await setShareCount(env.DB, {
       operationId: crypto.randomUUID(),
       orderDate,
+      mealPeriod,
       deviceId: ADMIN_IMPORT_DEVICE_ID,
       displayName: ADMIN_IMPORT_DISPLAY_NAME,
       shareCount: input.shareCount,

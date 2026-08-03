@@ -13,13 +13,14 @@ function context(request: Request, params: Record<string, string> = {}) {
   return { request, env, params } as unknown as EventContext<Cloudflare.Env, string, Record<string, string>>;
 }
 
-function adjustRequest(operationId: string, orderDate = today) {
+function adjustRequest(operationId: string, orderDate = today, mealPeriod: "lunch" | "dinner" = "lunch") {
   return new Request("https://example.test/api/order/adjust", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
       operationId,
       orderDate,
+      mealPeriod,
       menuItemId: "dish-suan-cai-yu",
       deviceId: "device-a",
       displayName: "张三",
@@ -31,19 +32,19 @@ function adjustRequest(operationId: string, orderDate = today) {
 describe("order APIs", () => {
   it("locks the Shanghai business day from the scheduled worker", async () => {
     await worker.scheduled(
-      { scheduledTime: Date.parse("2026-07-30T15:59:00.000Z"), cron: "59 15 * * *", noRetry() {} } as ScheduledController,
+      { scheduledTime: Date.parse("2026-07-30T07:00:00.000Z"), cron: "0 7 * * *", noRetry() {} } as ScheduledController,
       env,
       { waitUntil() {}, passThroughOnException() {} } as unknown as ExecutionContext,
     );
-    expect((await env.DB.prepare("SELECT locked FROM daily_orders WHERE order_date = ?").bind("2026-07-30").first<{ locked: number }>())?.locked).toBe(1);
+    expect((await env.DB.prepare("SELECT locked FROM daily_orders WHERE order_date = ?").bind("2026-07-30#lunch").first<{ locked: number }>())?.locked).toBe(1);
   });
 
   it("uses request fallback before bootstrapping after the Shanghai cutoff", async () => {
-    const handler = createBootstrapHandler(() => new Date("2026-07-30T16:01:00.000Z"));
+    const handler = createBootstrapHandler(() => new Date("2026-07-30T07:01:00.000Z"));
     const response = await handler(context(new Request("https://example.test/api/bootstrap")));
     expect(response.status).toBe(200);
-    expect((await env.DB.prepare("SELECT locked FROM daily_orders WHERE order_date = ?").bind("2026-07-30").first<{ locked: number }>())?.locked).toBe(1);
-    expect((await env.DB.prepare("SELECT COUNT(*) AS count FROM automatic_order_locks WHERE order_date = ? AND source = 'request_fallback'").bind("2026-07-30").first<{ count: number }>())?.count).toBe(1);
+    expect((await env.DB.prepare("SELECT locked FROM daily_orders WHERE order_date = ?").bind("2026-07-30#lunch").first<{ locked: number }>())?.locked).toBe(1);
+    expect((await env.DB.prepare("SELECT COUNT(*) AS count FROM automatic_order_locks WHERE order_date = ? AND source = 'request_fallback'").bind("2026-07-30#lunch").first<{ count: number }>())?.count).toBe(1);
   });
   it("bootstraps restaurant, active menu, and today's order", async () => {
     const response = await bootstrap(context(new Request("https://example.test/api/bootstrap")));
@@ -59,6 +60,15 @@ describe("order APIs", () => {
     expect((await adjust(context(adjustRequest("api-op-1")))).status).toBe(200);
     const replay = await adjust(context(adjustRequest("api-op-1")));
     expect((await replay.json() as any).dishes[0].quantity).toBe(1);
+  });
+
+  it("keeps lunch and dinner quantities in separate orders", async () => {
+    const lunch = await adjust(context(adjustRequest("lunch-op", today, "lunch")));
+    const dinner = await adjust(context(adjustRequest("dinner-op", today, "dinner")));
+
+    expect(await lunch.json()).toMatchObject({ orderDate: today, mealPeriod: "lunch", totalQuantity: 1 });
+    expect(await dinner.json()).toMatchObject({ orderDate: today, mealPeriod: "dinner", totalQuantity: 1 });
+    expect((await env.DB.prepare("SELECT COUNT(*) AS count FROM daily_orders WHERE order_date IN (?, ?)").bind(`${today}#lunch`, `${today}#dinner`).first<{ count: number }>())?.count).toBe(2);
   });
 
   it("returns unchanged polling state when revision matches", async () => {
@@ -126,9 +136,10 @@ describe("order APIs", () => {
       env.DB.prepare("INSERT INTO daily_orders (order_date, share_count, revision, locked, updated_at) VALUES ('2026-07-29', 1, 0, 0, CURRENT_TIMESTAMP)"),
     ]);
     const response = await history(context(new Request("https://example.test/api/history")));
-    expect((await response.json() as any).dates.map((item: any) => item.orderDate)).toEqual([
-      "2026-07-29",
-      "2026-07-28",
+    expect((await response.json() as any).dates.map((item: any) => `${item.orderDate}:${item.mealPeriod}`)).toEqual([
+      "2026-07-29:dinner",
+      "2026-07-29:lunch",
+      "2026-07-28:lunch",
     ]);
   });
 

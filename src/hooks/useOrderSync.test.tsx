@@ -48,9 +48,22 @@ describe("useOrderSync", () => {
       await Promise.resolve();
     });
 
-    expect(api.changes).toHaveBeenCalledWith("2026-07-30", 0, 0);
+    expect(api.changes).toHaveBeenCalledWith("2026-07-30", 0, 0, "dinner");
     expect(result.current.restaurantName).toBe("彭记小炒");
     expect(result.current.menu).toEqual(updatedMenu);
+  });
+
+  it("saves the share count in the currently selected dinner order", async () => {
+    const api = fakeApi();
+    api.setShareCount.mockResolvedValue({ ...emptyOrder, mealPeriod: "dinner", shareCount: 3 });
+    const { result } = renderHook(() => useOrderSync({ deviceId: "device-a", displayName: "张三", api }));
+    await act(async () => { await Promise.resolve(); });
+
+    await act(async () => { await result.current.setShareCount(3); });
+
+    expect(api.setShareCount).toHaveBeenCalledWith(expect.objectContaining({
+      orderDate: "2026-07-30", mealPeriod: "dinner", shareCount: 3,
+    }));
   });
 
   it("coalesces concurrent polling triggers into one request", async () => {
@@ -107,7 +120,7 @@ describe("useOrderSync", () => {
     });
 
     expect(result.current.date).toBe("2026-07-31");
-    expect(api.bootstrap).toHaveBeenCalledWith("2026-07-31");
+    expect(api.bootstrap).toHaveBeenCalledWith("2026-07-31", "lunch");
   });
 
   it("discards offline operations from the previous business date after midnight", async () => {

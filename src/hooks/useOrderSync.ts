@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { apiClient, type AdjustRequest, type BootstrapResponse, type OrderingApi, type OrderSnapshot, type ShareCountRequest } from "../api/client";
 import { getShanghaiBusinessDate } from "../domain/date";
+import { getShanghaiMealPeriod, type MealPeriod } from "../domain/meal-period";
 import { createPendingOperation, enqueueOperation, loadQueue, removeOperation, updateOperationFailure, type PendingOperation } from "../domain/queue";
 import type { MenuItem } from "../domain/types";
 import type { SyncState } from "../components/SyncStatus";
@@ -37,12 +38,14 @@ function optimisticAdjust(order: OrderSnapshot, menu: MenuItem[], identity: Iden
 export function useOrderSync(identity: Identity & { api?: OrderingApi }) {
   const api = identity.api ?? apiClient;
   const [date, setDate] = useState(() => getShanghaiBusinessDate());
+  const [mealPeriod, setMealPeriod] = useState<MealPeriod>(() => getShanghaiMealPeriod());
   const [restaurantName, setRestaurantName] = useState("今日点餐");
   const [menu, setMenu] = useState<MenuItem[]>([]);
   const [order, setOrder] = useState<OrderSnapshot | null>(null);
   const [status, setStatus] = useState<SyncState>(navigator.onLine ? "syncing" : "offline");
   const orderRef = useRef(order); orderRef.current = order;
   const dateRef = useRef(date); dateRef.current = date;
+  const mealPeriodRef = useRef(mealPeriod); mealPeriodRef.current = mealPeriod;
   const configurationRevisionRef = useRef(0);
   const pollRunningRef = useRef(false);
   const pollFailuresRef = useRef(0);
@@ -54,12 +57,12 @@ export function useOrderSync(identity: Identity & { api?: OrderingApi }) {
     orderRef.current = value.order;
     configurationRevisionRef.current = value.configurationRevision ?? 0;
   }, []);
-  const refresh = useCallback(async () => { const value = await api.bootstrap(date); applyBootstrap(value); setStatus("synced"); }, [api, date, applyBootstrap]);
+  const refresh = useCallback(async () => { const value = await api.bootstrap(date, mealPeriod); applyBootstrap(value); setStatus("synced"); }, [api, date, mealPeriod, applyBootstrap]);
   const poll = useCallback(async () => {
     if (!navigator.onLine || !orderRef.current || pollRunningRef.current) return;
     pollRunningRef.current = true;
     try {
-      const result = await api.changes(date, orderRef.current.revision, configurationRevisionRef.current);
+      const result = await api.changes(date, orderRef.current.revision, configurationRevisionRef.current, mealPeriod);
       if (result.changed && result.order && result.order.revision >= orderRef.current.revision) {
         setOrder(result.order);
         orderRef.current = result.order;
@@ -77,7 +80,7 @@ export function useOrderSync(identity: Identity & { api?: OrderingApi }) {
     } finally {
       pollRunningRef.current = false;
     }
-  }, [api, date]);
+  }, [api, date, mealPeriod]);
 
   const sendOperation = useCallback(async (operation: PendingOperation) => {
     try {
@@ -97,14 +100,14 @@ export function useOrderSync(identity: Identity & { api?: OrderingApi }) {
     if (!navigator.onLine) return;
     setStatus("syncing");
     for (const operation of loadQueue()) {
-      if (operation.body.orderDate !== date) {
+      if (operation.body.orderDate !== date || (operation.body.mealPeriod ?? "lunch") !== mealPeriod) {
         removeOperation(operation.operationId);
         continue;
       }
       await sendOperation(operation);
     }
     await refresh();
-  }, [date, refresh, sendOperation]);
+  }, [date, mealPeriod, refresh, sendOperation]);
 
   useEffect(() => {
     void refresh().then(replay).catch(() => setStatus(navigator.onLine ? "failed" : "offline"));
@@ -115,7 +118,9 @@ export function useOrderSync(identity: Identity & { api?: OrderingApi }) {
       const delay = Math.min(baseDelay * 2 ** pollFailuresRef.current, MAX_POLL_BACKOFF_MS);
       timer = window.setTimeout(async () => {
         const currentDate = getShanghaiBusinessDate();
-        if (currentDate !== dateRef.current) { setDate(currentDate); return; }
+        const currentMealPeriod = getShanghaiMealPeriod();
+        if (currentDate !== dateRef.current) { setDate(currentDate); setMealPeriod(currentMealPeriod); return; }
+        if (currentMealPeriod !== mealPeriodRef.current) { setMealPeriod(currentMealPeriod); return; }
         await poll();
         schedule();
       }, delay);
@@ -130,21 +135,21 @@ export function useOrderSync(identity: Identity & { api?: OrderingApi }) {
   }, [poll, refresh, replay]);
 
   const adjust = useCallback(async (menuItemId: string, delta: 1 | -1) => {
-    const body = { orderDate: date, menuItemId, deviceId: identity.deviceId, displayName: identity.displayName, delta };
+    const body = { orderDate: date, mealPeriod, menuItemId, deviceId: identity.deviceId, displayName: identity.displayName, delta };
     const operation = createPendingOperation("adjust", body);
     enqueueOperation(operation);
     if (orderRef.current) { const optimistic = optimisticAdjust(orderRef.current, menu, identity, menuItemId, delta); setOrder(optimistic); orderRef.current = optimistic; }
     if (!navigator.onLine) { setStatus("offline"); return; }
     setStatus("syncing"); await sendOperation(operation);
-  }, [date, identity.deviceId, identity.displayName, menu, sendOperation]);
+  }, [date, mealPeriod, identity.deviceId, identity.displayName, menu, sendOperation]);
 
   const setShareCount = useCallback(async (shareCount: number) => {
-    const body = { orderDate: date, deviceId: identity.deviceId, displayName: identity.displayName, shareCount };
+    const body = { orderDate: date, mealPeriod, deviceId: identity.deviceId, displayName: identity.displayName, shareCount };
     const operation = createPendingOperation("share-count", body); enqueueOperation(operation);
     if (orderRef.current) setOrder({ ...orderRef.current, shareCount });
     if (!navigator.onLine) { setStatus("offline"); return; }
     setStatus("syncing"); await sendOperation(operation);
-  }, [date, identity.deviceId, identity.displayName, sendOperation]);
+  }, [date, mealPeriod, identity.deviceId, identity.displayName, sendOperation]);
 
-  return { date, restaurantName, menu, order, status, adjust, setShareCount, refresh };
+  return { date, mealPeriod, setMealPeriod, restaurantName, menu, order, status, adjust, setShareCount, refresh };
 }
