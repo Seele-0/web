@@ -36,12 +36,17 @@ export async function ensureAutomaticLock(db: D1Database, input: AutomaticLockIn
         (order_date, locked_at, source, execution_token)
        VALUES (?, ?, ?, ?)`,
     ).bind(storageId, input.now, input.source, input.executionToken),
+    // A cutoff is still remembered even when nobody ordered, but an empty
+    // daily_orders row is not an order and must not become history.
     db.prepare(
-      `INSERT INTO daily_orders (order_date, share_count, revision, locked, updated_at)
-       SELECT ?, 1, 0, 0, ?
-       WHERE ${ownsMarker}
-       ON CONFLICT(order_date) DO NOTHING`,
-    ).bind(storageId, input.now, storageId, input.executionToken),
+      `DELETE FROM daily_orders
+       WHERE order_date = ?
+         AND ${ownsMarker}
+         AND NOT EXISTS (
+           SELECT 1 FROM order_contributions
+           WHERE order_date = daily_orders.order_date AND quantity > 0
+         )`,
+    ).bind(storageId, storageId, input.executionToken),
     db.prepare(
       `UPDATE daily_orders
        SET locked = 1, revision = revision + 1, updated_at = ?
@@ -50,8 +55,9 @@ export async function ensureAutomaticLock(db: D1Database, input: AutomaticLockIn
     db.prepare(
       `INSERT INTO activity_log (order_date, action, details_json, created_at)
        SELECT ?, 'automatic_lock_order', json_object('source', ?, 'executionToken', ?, 'mealPeriod', ?), ?
-       WHERE ${ownsMarker}`,
-    ).bind(storageId, input.source, input.executionToken, input.mealPeriod, input.now, storageId, input.executionToken),
+       WHERE ${ownsMarker}
+         AND EXISTS (SELECT 1 FROM daily_orders WHERE order_date = ?)`,
+    ).bind(storageId, input.source, input.executionToken, input.mealPeriod, input.now, storageId, input.executionToken, storageId),
   ]);
 
   const marker = await db

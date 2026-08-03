@@ -46,9 +46,17 @@ describe("automatic order locking", () => {
   });
 
   it("treats a legacy date-only order as dinner", async () => {
-    await env.DB.prepare(
-      "INSERT INTO daily_orders (order_date, share_count, revision, locked, updated_at) VALUES (?, 1, 0, 0, ?)",
-    ).bind("2026-07-30", "2026-07-30T06:00:00.000Z").run();
+    await env.DB.batch([
+      env.DB.prepare(
+        "INSERT INTO daily_orders (order_date, share_count, revision, locked, updated_at) VALUES (?, 1, 0, 0, ?)",
+      ).bind("2026-07-30", "2026-07-30T06:00:00.000Z"),
+      env.DB.prepare(
+        "INSERT INTO order_items (order_date, menu_item_id, name, price_cents, sort_order, created_at, updated_at) VALUES (?, 'dish-suan-cai-yu', '历史菜品', 1200, 1, ?, ?)",
+      ).bind("2026-07-30", "2026-07-30T06:00:00.000Z", "2026-07-30T06:00:00.000Z"),
+      env.DB.prepare(
+        "INSERT INTO order_contributions (order_date, menu_item_id, device_id, display_name, quantity, updated_at) VALUES (?, 'dish-suan-cai-yu', 'legacy-device', '历史用户', 1, ?)",
+      ).bind("2026-07-30", "2026-07-30T06:00:00.000Z"),
+    ]);
 
     await ensureAutomaticLock(env.DB, {
       orderDate: "2026-07-30",

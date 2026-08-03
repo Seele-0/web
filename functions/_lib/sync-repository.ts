@@ -12,10 +12,13 @@ export async function getSyncRevisions(db: D1Database, orderDate: string): Promi
   const row = await db
     .prepare(
       `SELECT
-         COALESCE((SELECT revision FROM daily_orders WHERE order_date = ?), 0) AS revision,
+         COALESCE(
+           (SELECT revision FROM daily_orders WHERE order_date = ?),
+           CASE WHEN EXISTS (SELECT 1 FROM automatic_order_locks WHERE order_date = ?) THEN 1 ELSE 0 END
+         ) AS revision,
          COALESCE((SELECT CAST(value AS INTEGER) FROM settings WHERE key = 'menu_revision'), 0) AS configuration_revision`,
     )
-    .bind(orderDate)
+    .bind(orderDate, orderDate)
     .first<SyncRevisionRow>();
 
   return {

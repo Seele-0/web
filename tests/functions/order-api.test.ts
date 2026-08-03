@@ -36,14 +36,16 @@ describe("order APIs", () => {
       env,
       { waitUntil() {}, passThroughOnException() {} } as unknown as ExecutionContext,
     );
-    expect((await env.DB.prepare("SELECT locked FROM daily_orders WHERE order_date = ?").bind("2026-07-30#lunch").first<{ locked: number }>())?.locked).toBe(1);
+    expect(await env.DB.prepare("SELECT order_date FROM daily_orders WHERE order_date = ?").bind("2026-07-30#lunch").first()).toBeNull();
+    expect((await env.DB.prepare("SELECT COUNT(*) AS count FROM automatic_order_locks WHERE order_date = ? AND source = 'cron'").bind("2026-07-30#lunch").first<{ count: number }>())?.count).toBe(1);
   });
 
-  it("uses request fallback before bootstrapping after the Shanghai cutoff", async () => {
+  it("uses request fallback before bootstrapping after the Shanghai cutoff without saving an empty order", async () => {
     const handler = createBootstrapHandler(() => new Date("2026-07-30T07:01:00.000Z"));
-    const response = await handler(context(new Request("https://example.test/api/bootstrap")));
+    const response = await handler(context(new Request("https://example.test/api/bootstrap?mealPeriod=lunch")));
     expect(response.status).toBe(200);
-    expect((await env.DB.prepare("SELECT locked FROM daily_orders WHERE order_date = ?").bind("2026-07-30#lunch").first<{ locked: number }>())?.locked).toBe(1);
+    expect((await response.json() as { order: { locked: boolean; revision: number } }).order).toMatchObject({ locked: true, revision: 1 });
+    expect(await env.DB.prepare("SELECT order_date FROM daily_orders WHERE order_date = ?").bind("2026-07-30#lunch").first()).toBeNull();
     expect((await env.DB.prepare("SELECT COUNT(*) AS count FROM automatic_order_locks WHERE order_date = ? AND source = 'request_fallback'").bind("2026-07-30#lunch").first<{ count: number }>())?.count).toBe(1);
   });
   it("bootstraps restaurant, active menu, and today's order", async () => {
@@ -103,10 +105,10 @@ describe("order APIs", () => {
     const fakeDb = {
       prepare(sql: string) {
         preparedSql.push(sql);
-        if (sql.includes("order_contributions")) throw new Error("full snapshot should not be queried");
+        if (sql.includes("order_contributions") && !sql.includes("DELETE FROM daily_orders")) throw new Error("full snapshot should not be queried");
         return {
           bind() { return this; },
-          first: async () => sql.includes("automatic_order_locks")
+          first: async () => sql.startsWith("SELECT execution_token FROM automatic_order_locks")
             ? ({ execution_token: "another-runner" })
             : ({ revision: 3, configuration_revision: 4 }),
           all: async () => ({ results: [] }),
@@ -122,7 +124,7 @@ describe("order APIs", () => {
 
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ changed: false, revision: 3, configurationRevision: 4 });
-    expect(preparedSql.some((sql) => sql.includes("order_contributions"))).toBe(false);
+    expect(preparedSql.some((sql) => sql.includes("order_contributions") && !sql.includes("DELETE FROM daily_orders"))).toBe(false);
   });
 
   it("rejects ordinary writes to a past date", async () => {
@@ -130,16 +132,22 @@ describe("order APIs", () => {
     expect(response.status).toBe(403);
   });
 
-  it("returns history dates in descending order", async () => {
+  it("returns populated history dates in descending order and removes locked empty records", async () => {
     await env.DB.batch([
+      env.DB.prepare("INSERT INTO daily_orders (order_date, share_count, revision, locked, updated_at) VALUES ('2026-07-27', 1, 1, 1, CURRENT_TIMESTAMP)"),
       env.DB.prepare("INSERT INTO daily_orders (order_date, share_count, revision, locked, updated_at) VALUES ('2026-07-28', 1, 0, 0, CURRENT_TIMESTAMP)"),
       env.DB.prepare("INSERT INTO daily_orders (order_date, share_count, revision, locked, updated_at) VALUES ('2026-07-29', 1, 0, 0, CURRENT_TIMESTAMP)"),
+      env.DB.prepare("INSERT INTO order_items (order_date, menu_item_id, name, price_cents, sort_order, created_at, updated_at) VALUES ('2026-07-28', 'dish-suan-cai-yu', '酸菜鱼', 6800, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"),
+      env.DB.prepare("INSERT INTO order_items (order_date, menu_item_id, name, price_cents, sort_order, created_at, updated_at) VALUES ('2026-07-29', 'dish-suan-cai-yu', '酸菜鱼', 6800, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"),
+      env.DB.prepare("INSERT INTO order_contributions (order_date, menu_item_id, device_id, display_name, quantity, updated_at) VALUES ('2026-07-28', 'dish-suan-cai-yu', 'device-28', '用户28', 1, CURRENT_TIMESTAMP)"),
+      env.DB.prepare("INSERT INTO order_contributions (order_date, menu_item_id, device_id, display_name, quantity, updated_at) VALUES ('2026-07-29', 'dish-suan-cai-yu', 'device-29', '用户29', 1, CURRENT_TIMESTAMP)"),
     ]);
     const response = await history(context(new Request("https://example.test/api/history")));
     expect((await response.json() as any).dates.map((item: any) => `${item.orderDate}:${item.mealPeriod}`)).toEqual([
       "2026-07-29:dinner",
       "2026-07-28:dinner",
     ]);
+    expect(await env.DB.prepare("SELECT order_date FROM daily_orders WHERE order_date = '2026-07-27'").first()).toBeNull();
   });
 
   it("reads date-only legacy history as a dinner order", async () => {

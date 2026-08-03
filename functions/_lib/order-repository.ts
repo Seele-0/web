@@ -124,18 +124,35 @@ export async function resolveOrderStorageId(
   return orderDate;
 }
 
-function assertUnlocked(order: OrderRow | null): void {
-  if (order?.locked) {
+async function isAutomaticallyLocked(db: D1Database, orderDate: string): Promise<boolean> {
+  return Boolean(
+    await db
+      .prepare("SELECT 1 FROM automatic_order_locks WHERE order_date = ?")
+      .bind(orderDate)
+      .first(),
+  );
+}
+
+async function assertUnlocked(db: D1Database, orderDate: string): Promise<void> {
+  const order = await getOrderRow(db, orderDate);
+  // A persisted daily row with locked = 0 is an administrator's explicit
+  // reopening of an automatically locked order.
+  if (order?.locked || (!order && await isAutomaticallyLocked(db, orderDate))) {
     throw new HttpError(423, "order_locked", "订单已锁定");
   }
 }
 
-function ensureOrderStatement(db: D1Database, orderDate: string, now: string): D1PreparedStatement {
+function ensureOrderStatement(
+  db: D1Database,
+  orderDate: string,
+  now: string,
+  initialRevision = 0,
+): D1PreparedStatement {
   return db
     .prepare(
-      "INSERT INTO daily_orders (order_date, share_count, revision, locked, updated_at) VALUES (?, 1, 0, 0, ?) ON CONFLICT(order_date) DO NOTHING",
+      "INSERT INTO daily_orders (order_date, share_count, revision, locked, updated_at) VALUES (?, 1, ?, 0, ?) ON CONFLICT(order_date) DO NOTHING",
     )
-    .bind(orderDate, now);
+    .bind(orderDate, initialRevision, now);
 }
 
 const ORDER_UNLOCKED_GUARD = "EXISTS (SELECT 1 FROM daily_orders WHERE order_date = ? AND locked = 0)";
@@ -223,7 +240,7 @@ export async function adjustContribution(db: D1Database, input: AdjustInput): Pr
     return getOrderSnapshot(db, input.orderDate);
   }
 
-  assertUnlocked(await getOrderRow(db, input.orderDate));
+  await assertUnlocked(db, input.orderDate);
   const item = await db
     .prepare("SELECT id FROM menu_items WHERE id = ? AND active = 1")
     .bind(input.menuItemId)
@@ -329,7 +346,7 @@ export async function setShareCount(db: D1Database, input: ShareCountInput): Pro
     throw new HttpError(400, "invalid_share_count", "份数必须为 1 到 100 的整数");
   }
   if (await operationExists(db, input.operationId)) return getOrderSnapshot(db, input.orderDate);
-  assertUnlocked(await getOrderRow(db, input.orderDate));
+  await assertUnlocked(db, input.orderDate);
 
   const results = await db.batch([
     ensureOrderStatement(db, input.orderDate, input.now),
@@ -373,7 +390,7 @@ export async function setShareCount(db: D1Database, input: ShareCountInput): Pro
 
 export async function replaceOrderFromText(db: D1Database, input: ReplaceOrderInput): Promise<OrderSnapshot> {
   input = { ...input, orderDate: await resolveOrderStorageId(db, input.orderDate, input.mealPeriod) };
-  assertUnlocked(await getOrderRow(db, input.orderDate));
+  await assertUnlocked(db, input.orderDate);
   const parsed = parseOrderImportText(input.text);
   if (parsed.errors.length > 0 || parsed.items.length === 0) {
     throw new HttpError(400, "invalid_order_text", parsed.errors[0]?.message ?? "订单不能为空");
@@ -441,7 +458,7 @@ export async function replaceOrderFromText(db: D1Database, input: ReplaceOrderIn
 export async function upsertAdminOrderItem(db: D1Database, input: AdminOrderItemInput): Promise<OrderSnapshot> {
   input = { ...input, orderDate: await resolveOrderStorageId(db, input.orderDate, input.mealPeriod) };
   const { name, priceCents, quantity } = validateAdminOrderItem(input);
-  assertUnlocked(await getOrderRow(db, input.orderDate));
+  await assertUnlocked(db, input.orderDate);
   const serializedItems = serializedAdminMenuItems([{ name, priceCents }]);
   const results = await db.batch([
     ensureOrderStatement(db, input.orderDate, input.now),
@@ -515,7 +532,7 @@ export async function upsertAdminOrderItem(db: D1Database, input: AdminOrderItem
 
 export async function deleteOrderItem(db: D1Database, input: DeleteOrderItemInput): Promise<OrderSnapshot> {
   input = { ...input, orderDate: await resolveOrderStorageId(db, input.orderDate, input.mealPeriod) };
-  assertUnlocked(await getOrderRow(db, input.orderDate));
+  await assertUnlocked(db, input.orderDate);
   const results = await db.batch([
     db.prepare(
       `DELETE FROM order_contributions
@@ -547,7 +564,7 @@ export async function setAdminContribution(db: D1Database, input: AdminContribut
     || !Number.isInteger(input.quantity) || input.quantity < 0 || input.quantity > 999) {
     throw new HttpError(400, "invalid_contribution", "贡献修正参数无效");
   }
-  assertUnlocked(await getOrderRow(db, input.orderDate));
+  await assertUnlocked(db, input.orderDate);
   const menuItem = await db.prepare("SELECT id FROM menu_items WHERE id = ?").bind(input.menuItemId).first();
   if (!menuItem) throw new HttpError(404, "menu_item_not_found", "菜品不存在");
 
@@ -617,7 +634,10 @@ export async function setAdminContribution(db: D1Database, input: AdminContribut
 export async function getOrderSnapshot(db: D1Database, orderDate: string, mealPeriod?: MealPeriod): Promise<OrderSnapshot> {
   const storageId = await resolveOrderStorageId(db, orderDate, mealPeriod);
   const slot = getOrderSlotFromStorageId(storageId);
-  const order = await getOrderRow(db, storageId);
+  const [order, automaticallyLocked] = await Promise.all([
+    getOrderRow(db, storageId),
+    isAutomaticallyLocked(db, storageId),
+  ]);
   const rows = await db
     .prepare(
       `SELECT c.menu_item_id, i.name, i.price_cents, i.sort_order,
@@ -658,8 +678,8 @@ export async function getOrderSnapshot(db: D1Database, orderDate: string, mealPe
     orderDate: slot.orderDate,
     mealPeriod: slot.mealPeriod,
     shareCount: order?.share_count ?? 1,
-    revision: order?.revision ?? 0,
-    locked: Boolean(order?.locked),
+    revision: order?.revision ?? (automaticallyLocked ? 1 : 0),
+    locked: order ? Boolean(order.locked) : automaticallyLocked,
     totalQuantity: dishes.reduce((sum, dish) => sum + dish.quantity, 0),
     totalCents: dishes.reduce((sum, dish) => sum + dish.subtotalCents, 0),
     dishes,
@@ -668,7 +688,7 @@ export async function getOrderSnapshot(db: D1Database, orderDate: string, mealPe
 
 export async function clearOrder(db: D1Database, input: AdminClearInput): Promise<OrderSnapshot> {
   input = { ...input, orderDate: await resolveOrderStorageId(db, input.orderDate, input.mealPeriod) };
-  assertUnlocked(await getOrderRow(db, input.orderDate));
+  await assertUnlocked(db, input.orderDate);
   const results = await db.batch([
     ensureOrderStatement(db, input.orderDate, input.now),
     db.prepare(`DELETE FROM order_contributions WHERE order_date = ? AND ${ORDER_UNLOCKED_GUARD}`)
@@ -692,8 +712,9 @@ export async function clearOrder(db: D1Database, input: AdminClearInput): Promis
 
 export async function setOrderLocked(db: D1Database, input: AdminLockInput): Promise<void> {
   input = { ...input, orderDate: await resolveOrderStorageId(db, input.orderDate, input.mealPeriod) };
+  const initialRevision = (await isAutomaticallyLocked(db, input.orderDate)) ? 1 : 0;
   await db.batch([
-    ensureOrderStatement(db, input.orderDate, input.now),
+    ensureOrderStatement(db, input.orderDate, input.now, initialRevision),
     db
       .prepare("UPDATE daily_orders SET locked = ?, revision = revision + 1, updated_at = ? WHERE order_date = ?")
       .bind(input.locked ? 1 : 0, input.now, input.orderDate),
